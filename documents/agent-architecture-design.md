@@ -1,15 +1,27 @@
 ## `baby_care_agent` 서비스 ai 에이전트 계획서 
 
-## 프로젝트 개요
+## 01. 프로젝트 개요
 AI Baby Care Assistant는 영유아를 돌보는 보호자가 육아 과정에서 겪는 불안과 정보 부족을 줄일 수 있도록 돕는 AI 기반 육아 지원 서비스입니다. 
 
-수유, 수면, 배변, 발열, 이유식 등 매일 반복되는 육아 기록을 쉽고 체계적으로 관리하고, 기록을 바탕으로 아이의 생활 패턴과 주의가 필요한 변화를 직관적으로 확인할 수 있도록 설계합니다.
-보호자는 궁금한 상황을 자연어로 질문해 맞춤형 육아 정보를 얻고, 필요한 시점에는 병원 방문 또는 전문가 상담을 고려할 수 있는 안내를 받을 수 있습니다. 또한 가족 구성원 간 육아 기록을 공유해 돌봄 정보를 일관되게 이어갈 수 있습니다.
-궁극적으로 이 서비스는 의료 진단을 대신하기보다, 보호자가 아이의 상태를 더 잘 이해하고 일상적인 돌봄 의사결정을 자신 있게 내릴 수 있도록 돕는 신뢰할 수 있는 육아 동반자를 목표로 합니다.
+수유, 수면, 배변 등 매일 반복되는 육아 기록을 쉽고 체계적으로 관리하고, 기록을 바탕으로 아이의 생활 패턴과 주의가 필요한 변화를 직관적으로 확인할 수 있도록 설계합니다.
+보호자는 궁금한 상황을 자연어로 질문해 맞춤형 육아 정보를 얻고, 필요한 시점에는 병원 방문 또는 전문가 상담을 고려할 수 있는 안내를 받을 수 있습니다. 
+궁극적으로 이 서비스는 보호자가 아이의 상태를 더 잘 이해하고 일상적인 돌봄 의사결정을 내릴 수 있도록 돕는 신뢰할 수 있는 육아 동반자를 목표로 합니다.
 
 `baby_care_agent`는 0~36개월 영유아 보호자의 질문을 이해하고, 아기 정보·육아 기록·RAG·병원 검색 결과를 조합하여 답변하는 하나의 Single Agent입니다.
 
-## 핵심 AI Agent — `baby_care_agent`
+| 항목 | 내용 |
+|---|---|
+| AI Agent | OpenAI Responses API 기반 `baby_care_agent` |
+| Agent Runtime | 공통 순수 Python Agent Loop |
+| Tool 연결 | Streamable HTTP MCP |
+| MCP Server | `baby_care_server`, `baby_info_server` |
+| Backend | FastAPI |
+| Frontend | Streamlit |
+| 저장소 | PostgreSQL, Redis |
+| 외부 데이터 | RAG 문서, 병원 공공데이터 API |
+| 파일 처리 | 이미지·음성 임시 저장 후 삭제 |
+
+## 02. 핵심 AI Agent — `baby_care_agent`
 
 | 항목 | 내용 |
 | --- | --- |
@@ -70,7 +82,7 @@ Tool 실행 여부는 Backend 승인 정책이 통제합니다.
 )
 ```
 
-### 필수 구현 범위
+## 03. 필수 구현 범위
 
 - 아기 프로필·알레르기 확인
 - 육아 기록 저장·조회와 기록 수정·삭제 연결
@@ -84,7 +96,7 @@ Tool 실행 여부는 Backend 승인 정책이 통제합니다.
 - 대화 요약과 장기 Memory의 PostgreSQL `user_memories` 저장
 - FastAPI SSE를 통한 사용자용 채팅 진행 상태 연동
 
-### 핵심 판단 흐름
+## 04. 핵심 판단 흐름
 
 ```mermaid
 flowchart TD
@@ -101,7 +113,7 @@ flowchart TD
     H --> K["FastAPI가 저장 결과 반환"]
 ```
 
-### 기록 입력 방식과 미수유 처리
+## 05. 기록 입력 방식과 미수유 처리
 
 ```
 텍스트 입력
@@ -133,7 +145,7 @@ STT 입력
 
 `amount_ml=0`은 Care Server 계약상 유효한 값이지만, Backend가 이를 “미수유” 의미로 자동 생성하지 않습니다. 사용자가 구조화된 입력에서 명시한 경우에만 계약대로 전달할 수 있습니다.
 
-### OpenAI 메시지 구성
+## 06. OpenAI 메시지 구성
 
 시스템 메시지와 사용자 메시지는 분리합니다.
 
@@ -160,7 +172,7 @@ Agent 시스템 메시지
 
 API Key, DB·Redis 접속정보, 이미지·음성 원본, 모델의 숨겨진 내부 추론은 메시지에 넣지 않습니다.
 
-### 예상하지 못한 채팅 처리
+## 07. 예상하지 못한 채팅 처리
 
 모든 알 수 없는 요청을 같은 오류로 처리하지 않고 다음 기준으로 구분합니다.
 
@@ -196,7 +208,7 @@ CHAT_RESPONSE_TYPES = [
 > 요청을 이해하지 못했거나 AI 육아 도우미의 지원 범위를 벗어났어요. 수유·수면·배변·성장·예방접종·육아 정보·병원 검색에 관해 질문해 주세요.
 > 
 
-### 정상 케이스 시나리오
+## 08. 정상 케이스 시나리오
 
 아래 표는 이후 테스트케이스 테이블의 초안으로 사용합니다.
 
@@ -218,7 +230,7 @@ CHAT_RESPONSE_TYPES = [
 | N-14 | RAG와 기록 모두 필요 | `최근 기록을 보면 수면은 괜찮아?` | 기록 조회 후 수면 RAG 호출 | 기록 요약과 일반 가이드를 구분해 답변 |
 | N-15 | 최근 채팅 8개 또는 요약 기준 도달 | 정상 대화 계속 | 최근 대화를 사실 중심으로 요약 | `user_memories(memory_type=conversation_summary)`에 요약 저장, Redis에는 최근 8개 유지 |
 
-### 비정상·예외 케이스 시나리오
+## 09. 비정상·예외 케이스 시나리오
 
 | ID | 비정상 조건 | Agent·Backend 처리 | 실행 여부 | 예상 결과 |
 | --- | --- | --- | --- | --- |
@@ -250,7 +262,7 @@ CHAT_RESPONSE_TYPES = [
 
 ---
 
-## 5. Agent Profile 공통 구조
+## 10. Agent Profile 공통 구조
 
 ```python
 from dataclasses import dataclass
@@ -282,11 +294,11 @@ Agent Profile은 Agent Runtime과 분리합니다. 현재 Agent가 실행할 수
 
 ---
 
-## 6. `baby_care_agent` 설계
+## 11. `baby_care_agent` 설계
 
 문서 맨 위에 정의한 `BABY_CARE_AGENT` 하나를 사용합니다. Agent별 Goal·Instructions·Allowed Tools와 공통 Runtime을 분리하여, Model이 허용된 Tool만 선택하도록 합니다.
 
-### 요청별 판단 흐름
+### 11.1 요청별 판단 흐름
 
 | 요청 유형 | 확인할 Context | 선택 Tool | 종료 조건 |
 | --- | --- | --- | --- |
@@ -300,9 +312,9 @@ Agent Profile은 Agent Runtime과 분리합니다. 현재 Agent가 실행할 수
 
 ---
 
-## 7. Tool 설계
+## 12. Tool 설계
 
-### 7.1 `baby_care_server` Tool
+### 12.1 `baby_care_server` Tool
 
 | Tool | 주요 입력 | 정상 출력 | 실패·빈 결과 | 위험도 |
 | --- | --- | --- | --- | --- |
@@ -310,7 +322,7 @@ Agent Profile은 Agent Runtime과 분리합니다. 현재 Agent가 실행할 수
 | `get_care_records` | `baby_id`, 조회 유형·기간 | 기록 목록 또는 패턴 | 기록 없음은 빈 목록·`sufficient_data=false` | `low` |
 | `analyze_infant_stool` | `baby_id`, 임시 이미지 경로, 월령·수유 방식 | 관찰·주의 신호·출처 | 품질 불량·형식 오류 | `low` |
 
-### 7.2 `baby_info_server` Tool
+### 12.2 `baby_info_server` Tool
 
 | Tool | 주요 입력 | 정상 출력 | 실패·빈 결과 | 위험도 |
 | --- | --- | --- | --- | --- |
@@ -322,7 +334,7 @@ Agent Profile은 Agent Runtime과 분리합니다. 현재 Agent가 실행할 수
 | `search_development_guide` | 동일 | 발달 관련 Chunk·출처 | 결과 없으면 빈 Context | `low` |
 | `search_safety_guide` | 동일 | 안전 관련 Chunk·출처 | 결과 없으면 빈 Context | `low` |
 
-### 7.3 FastAPI 일반 API 처리
+## 13. FastAPI 일반 API 처리
 
 다음 기능은 Agent Tool 또는 Agent Action으로 실행하지 않습니다. Frontend가 FastAPI 일반 API를 직접 호출하고, FastAPI가 사용자·아기 소유권과 입력값을 검증한 후 처리합니다.
 
@@ -333,7 +345,7 @@ Agent Profile은 Agent Runtime과 분리합니다. 현재 Agent가 실행할 수
 | 저장된 기록 수정 | `PATCH /api/care-logs/{log_id}` | Frontend 입력과 소유권 검증 후 처리 |
 | 저장된 기록 삭제 | `DELETE /api/care-logs/{log_id}` | 삭제 대상과 소유권 검증 후 처리 |
 
-### Tool 발견과 실행
+## 14. Tool 발견과 실행
 
 ```
 1. Agent State 생성
@@ -353,7 +365,7 @@ Agent Profile은 Agent Runtime과 분리합니다. 현재 Agent가 실행할 수
 15. MAX_AGENT_STEPS를 넘으면 안전하게 중단
 ```
 
-### 공통 Agent Loop 예시
+## 15. 공통 Agent Loop 예시
 
 ```python
 async def run_agent(state: dict) -> dict:
@@ -401,9 +413,9 @@ async def run_agent(state: dict) -> dict:
 
 ---
 
-## 10. Agent State
+## 16. Agent State
 
-### 10.1 기본 State
+### 16.1 기본 State
 
 | 필드 | 타입 | 역할 |
 | --- | --- | --- |
@@ -423,7 +435,7 @@ async def run_agent(state: dict) -> dict:
 | `trace` | `list[dict]` | 실행 사건 목록 |
 | `answer` | `str | None` | 최종 답변 |
 
-### 10.2 STT 승인 State
+### 16.2 STT 승인 State
 
 STT에서 실제 육아 기록이 추출된 경우에만 다음 State를 Redis에 저장합니다. 승인 후 Agent Loop를 재개하지 않으므로 `response_id`와 `next_step`은 저장하지 않습니다.
 
@@ -440,9 +452,9 @@ STT에서 실제 육아 기록이 추출된 경우에만 다음 State를 Redis�
 | `status` | `str` | `waiting_stt_approval` |
 | `expires_at` | `datetime` | 승인 만료 시각 |
 
-### 10.3 STT 승인 전 저장과 승인 후 Tool 실행
+### 16.3 STT 승인 전 저장과 승인 후 Tool 실행
 
-이 프로젝트는 **B 방식**을 사용합니다. STT 승인 전 Agent 실행을 종료하고, 승인 후에는 Agent Loop를 재개하지 않습니다.
+STT 승인 전 Agent 실행을 종료하고, 승인 후에는 Agent Loop를 재개하지 않습니다.
 
 ```
 STT에서 실제 육아 기록 Function Call 발견
@@ -477,7 +489,7 @@ async def execute_after_stt_approval(state: dict) -> dict:
 
 사용자가 거절하면 `pending_call`을 실행하지 않고 `status=rejected`, `termination_reason=user_rejected`를 저장한 뒤 종료합니다. 중복 승인은 기존 처리 결과를 반환하고 Tool을 다시 실행하지 않습니다.
 
-### 종료·중단 상태
+## 17. 종료·중단 상태
 
 | 상황 | `status` | `termination_reason` |
 | --- | --- | --- |
@@ -491,11 +503,11 @@ async def execute_after_stt_approval(state: dict) -> dict:
 
 ---
 
-## 11. Trace와 Redis 저장
+## 18. Trace와 Redis 저장
 
 Trace는 모델의 숨겨진 생각을 저장하는 것이 아니라 실제로 발생한 실행 사건을 요약한 기록입니다.
 
-### Trace `owner`
+### 18.1 Trace `owner`
 
 | `owner` | 기록 예시 |
 | --- | --- |
@@ -516,7 +528,7 @@ Trace는 모델의 숨겨진 생각을 저장하는 것이 아니라 실제로 �
 ]
 ```
 
-### Redis Key
+### 18.2 Redis Key
 
 | Redis Key | 저장 내용 | TTL |
 | --- | --- | --- |
@@ -529,7 +541,7 @@ Trace는 모델의 숨겨진 생각을 저장하는 것이 아니라 실제로 �
 
 개인화 상태의 Redis 키와 값에는 모두 필요한 `user_id`, `session_id`, `baby_id`, `request_id`를 넣고 읽을 때 값 내부의 ID도 다시 검증합니다.
 
-### Trace 요약 예시
+### 18.3 Trace 요약 예시
 
 ```json
 {
@@ -557,7 +569,7 @@ await redis_client.set(
 )
 ```
 
-### 채팅 원문과 요약
+### 18.4 채팅 원문과 요약
 
 ```
 사용자 메시지 → Redis chat Key에 저장
@@ -571,7 +583,7 @@ await redis_client.set(
 
 과거 채팅 원문 조회·검색 기능은 구현하지 않습니다. 영구 저장 대상은 대화 전체가 아니라 다음 대화에 필요한 요약입니다.
 
-### 저장하지 않는 정보
+### 18.5 저장하지 않는 정보
 
 - 모델의 숨겨진 내부 추론 과정
 - API Key와 DB·Redis 접속정보
@@ -580,7 +592,7 @@ await redis_client.set(
 
 ---
 
-## 13. Tool 위험도 정책
+## 19. Tool 위험도 정책
 
 위험도만 따로 관리하지 않고 실행 종류·담당 서버·승인 방식을 하나의 정책에 등록합니다.
 
@@ -647,7 +659,7 @@ FORBIDDEN_TOOLS = {
 | `medium` | 육아 기록 저장 | 입력 출처에 따라 텍스트·UI는 즉시 실행하고 STT는 승인 후 실행 |
 | `forbidden` | 진단·처방·타 사용자 접근 | 승인 여부와 관계없이 차단 |
 
-### 승인 방식
+### 19.1 승인 방식
 
 | `approval` | 의미 | 예시 |
 | --- | --- | --- |
@@ -655,7 +667,7 @@ FORBIDDEN_TOOLS = {
 | `upload_action` | 사용자가 사진을 올리고 분석 버튼을 누른 행동으로 실행 | 기저귀 사진 분석 |
 | `source_based` | 입력 출처에 따라 승인 여부 결정 | 텍스트·UI 기록은 즉시 실행, STT 기록은 확인 후 실행 |
 
-### Allowlist와 정책 정합성 검사
+### 19.2 Allowlist와 정책 정합성 검사
 
 ```python
 def validate_allowed_action(
@@ -679,7 +691,7 @@ Agent Profile의 allowed_tools에 등록
 Backend ACTION_POLICY에 실행 위치·위험도·승인 방식 등록
 ```
 
-### 승인 흐름
+### 19.3 승인 흐름
 
 ```
 Model이 MCP Tool Call 제안

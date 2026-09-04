@@ -88,6 +88,8 @@
 
 ## 7. 전체 시스템 구성
 
+!image.png
+
 ```mermaid
 flowchart TD
     A["Streamlit"] --> B["FastAPI"]
@@ -385,123 +387,197 @@ flowchart TD
 | 3번 | `mcp_servers/baby_care_server/` | 육아 기록·기저귀 분석 |
 | 4번 | `mcp_servers/baby_info_server/` | RAG·Ollama·병원 검색 |
 
-## 충돌을 줄인 최종 디렉토리 구조
+## 최종 디렉토리 구조
 
 ```
-AI Baby Care Assistant
+baby-ai-agent/
 │
-├─ .env.example                         # 공통 환경변수 이름
-├─ .gitignore
-├─ README.md                            # 전체 실행 방법
-├─ docker-compose.yml                   # PostgreSQL·Redis·Ollama
-│
-├─ contracts/                           # 팀 공통 약속, 개발 전 확정
-│  ├─ api_contract.md                   # Streamlit ↔ FastAPI API 약속
-│  ├─ mcp_contract.md                   # FastAPI ↔ MCP Tool 약속
-│  ├─ data_contract.md                  # ID·시간·공통 문자열 약속
-│  └─ error_contract.md                 # 오류 코드·응답 형식
-│
-├─ frontend/                            # 1번: 프론트엔드 담당
-│  ├─ main.py                           # 시작 화면·테스트 로그인
-│  ├─ requirements.txt
-│  │
+├─ frontend/
+│  ├─ app.py
 │  ├─ pages/
-│  │  ├─ 1_Home.py
-│  │  ├─ 2_AI_Assistant.py
-│  │  ├─ 3_Care_Management.py
-│  │  └─ 4_My_Profile.py
-│  │
-│  ├─ api.py                            # FastAPI 호출
-│  ├─ components.py                    # 공통 UI
-│  ├─ session.py                       # session_state
-│  ├─ utils.py                         # 입력값·날짜 처리
-│  │
-│  └─ tests/
-│     └─ test_frontend.py
+│  │  ├─ login_page.py
+│  │  ├─ home_page.py
+│  │  ├─ care_page.py
+│  │  ├─ vaccination_page.py
+│  │  ├─ chat_page.py
+│  │  └─ profile_page.py
+│  ├─ common.py
+│  └─ api.py
 │
-├─ backend/                             # 2번: FastAPI 담당
-│  ├─ __init__.py
-│  ├─ main.py                           # FastAPI 실행
-│  ├─ config.py                         # 환경변수 설정
-│  ├─ database.py                       # PostgreSQL·Redis 연결
-│  ├─ schemas.py                        # API Pydantic 모델
-│  ├─ repositories.py                  # DB 처리
-│  ├─ mcp_clients.py                   # 두 MCP 서버 호출
-│  ├─ requirements.txt
-│  │
-│  ├─ routers/
-│  │  ├─ __init__.py
-│  │  ├─ auth_babies.py                # 로그인·아기 정보
-│  │  ├─ care.py                       # 기록 수정·삭제·알림·성장
-│  │  ├─ information.py                # 예방접종·병원 요청
-│  │  ├─ media.py                      # STT·사진 업로드
-│  │  └─ chat.py                       # AI 채팅·Tool 승인
-│  │
-│  ├─ services/
-│  │  ├─ __init__.py
-│  │  ├─ user_service.py
-│  │  ├─ care_service.py
-│  │  ├─ media_service.py
-│  │  └─ agent_service.py
-│  │
-│  └─ tests/
-│     └─ test_backend.py
-│
-├─ mcp_servers/
-│  │
-│  ├─ baby_care_server/                # 3번: MCP 서버 1 담당
-│  │  ├─ __init__.py
-│  │  ├─ server.py                     # MCP 서버 실행
-│  │  ├─ config.py
-│  │  ├─ database.py                   # PostgreSQL 연결
-│  │  ├─ schemas.py                    # Tool 입력값 검증
-│  │  ├─ tools.py                      # MCP Tool 등록
-│  │  ├─ service.py                    # 기록·사진 분석 처리
-│  │  ├─ requirements.txt
+├─ backend/
+│  ├─ app/
+│  │  ├─ main.py
 │  │  │
-│  │  └─ tests/
-│  │     └─ test_baby_care_server.py
+│  │  ├─ core/
+│  │  │  ├─ config.py
+│  │  │  ├─ constants.py
+│  │  │  ├─ api_response.py
+│  │  │  ├─ exceptions.py
+│  │  │  ├─ logging.py
+│  │  │  └─ record_policy.py
+│  │  │
+│  │  ├─ routers/
+│  │  │  ├─ auth_router.py
+│  │  │  ├─ baby_router.py
+│  │  │  ├─ care_router.py
+│  │  │  ├─ info_router.py
+│  │  │  ├─ chat_router.py
+│  │  │  ├─ media_router.py
+│  │  │  └─ memory_router.py
+│  │  │
+│  │  ├─ schemas/
+│  │  │  ├─ common.py
+│  │  │  ├─ auth.py
+│  │  │  ├─ baby.py
+│  │  │  ├─ care.py
+│  │  │  ├─ info.py
+│  │  │  ├─ chat.py
+│  │  │  ├─ media.py
+│  │  │  └─ memory.py
+│  │  │
+│  │  ├─ services/
+│  │  │  ├─ auth_service.py
+│  │  │  ├─ baby_service.py
+│  │  │  │
+│  │  │  ├─ care/
+│  │  │  │  ├─ care_log_service.py
+│  │  │  │  ├─ reminder_service.py
+│  │  │  │  └─ growth_service.py
+│  │  │  │
+│  │  │  ├─ info/
+│  │  │  │  ├─ vaccination_service.py
+│  │  │  │  └─ hospital_service.py
+│  │  │  │
+│  │  │  ├─ agent/
+│  │  │  │  ├─ agent_service.py
+│  │  │  │  ├─ chat_stream_service.py
+│  │  │  │  ├─ tool_call_service.py
+│  │  │  │  ├─ memory_service.py
+│  │  │  │  ├─ memory_selector.py
+│  │  │  │  ├─ memory_safety_service.py
+│  │  │  │  └─ memory_trace_service.py
+│  │  │  │
+│  │  │  └─ media/
+│  │  │     ├─ image_service.py
+│  │  │     └─ speech_service.py
+│  │  │
+│  │  ├─ repositories/
+│  │  │  ├─ baby_repository.py
+│  │  │  ├─ care_log_repository.py
+│  │  │  ├─ vaccination_repository.py
+│  │  │  ├─ reminder_repository.py
+│  │  │  └─ memory_repository.py
+│  │  │
+│  │  ├─ models/
+│  │  │  ├─ baby.py
+│  │  │  ├─ care_log.py
+│  │  │  ├─ vaccination.py
+│  │  │  ├─ reminder.py
+│  │  │  ├─ tool_execution.py
+│  │  │  └─ user_memory.py
+│  │  │
+│  │  ├─ prompts/
+│  │  │  ├─ memory_extraction_prompt.txt
+│  │  │  └─ memory_selection_prompt.txt
+│  │  │
+│  │  └─ mcp_clients/
+│  │     ├─ baby_care_client.py
+│  │     └─ baby_info_client.py
 │  │
-│  └─ baby_info_server/                # 4번: MCP 서버 2 담당
-│     ├─ __init__.py
-│     ├─ server.py                     # MCP 서버 실행
-│     ├─ config.py
-│     ├─ database.py                   # PostgreSQL·pgvector
-│     ├─ schemas.py                    # Tool 입력값 검증
-│     ├─ tools.py                      # MCP Tool 등록
-│     ├─ service.py                    # RAG·병원 검색
-│     ├─ requirements.txt
-│     │
-│     ├─ scripts/
-│     │  └─ load_documents.py          # 문서 임베딩·저장
-│     │
-│     └─ tests/
-│        └─ test_baby_info_server.py
-│
-├─ data/
-│  ├─ backend/                         # 백엔드 담당 데이터
+│  ├─ data/
 │  │  ├─ test_users.json
 │  │  ├─ vaccinations.json
 │  │  └─ growth_reference.json
 │  │
-│  └─ baby_info/                       # MCP 서버 2 담당 문서
-│     ├─ feeding/
-│     ├─ sleep/
-│     ├─ weaning/
-│     ├─ development/
-│     └─ safety/
+│  └─ requirements.txt
 │
-├─ database/
-│  ├─ 01_backend_tables.sql            # 2번 담당
-│  ├─ 02_care_logs.sql                 # 3번 담당
-│  ├─ 03_rag_tables.sql                # 4번 담당
-│  └─ 04_seed_data.sql                 # 테스트 데이터
+├─ mcp_servers/
+│  │
+│  ├─ baby_care_server/
+│  │  ├─ server.py
+│  │  ├─ config.py
+│  │  ├─ constants.py
+│  │  │
+│  │  ├─ tools/
+│  │  │  ├─ record_care_event.py
+│  │  │  ├─ get_care_records.py
+│  │  │  └─ analyze_infant_stool.py
+│  │  │
+│  │  ├─ schemas/
+│  │  │  ├─ care.py
+│  │  │  └─ stool.py
+│  │  │
+│  │  ├─ services/
+│  │  │  ├─ care_service.py
+│  │  │  ├─ pattern_service.py
+│  │  │  └─ stool_analysis_service.py
+│  │  │
+│  │  ├─ repositories/
+│  │  │  ├─ care_log_repository.py
+│  │  │  └─ rag_repository.py
+│  │  │
+│  │  ├─ prompts/
+│  │  │  ├─ stool_vision_prompt.txt
+│  │  │  └─ stool_answer_prompt.txt
+│  │  │
+│  │  ├─ workflows/
+│  │  │  └─ stool_analysis_workflow.py
+│  │  │
+│  │  ├─ rules/
+│  │  │  └─ infant_stool_triage.yaml
+│  │  │
+│  │  └─ tests/
+│  │     ├─ test_record_care_event.py
+│  │     ├─ test_get_care_records.py
+│  │     └─ test_stool_analysis.py
+│  │
+│  └─ baby_info_server/
+│     ├─ server.py
+│     ├─ config.py
+│     ├─ constants.py
+│     │
+│     ├─ tools/
+│     │  ├─ search_pediatric_hospitals.py
+│     │  ├─ search_emergency_hospitals.py
+│     │  ├─ search_feeding_guide.py
+│     │  ├─ search_sleep_guide.py
+│     │  ├─ search_weaning_guide.py
+│     │  ├─ search_development_guide.py
+│     │  └─ search_safety_guide.py
+│     │
+│     ├─ schemas/
+│     │  ├─ hospital.py
+│     │  └─ knowledge.py
+│     │
+│     ├─ services/
+│     │  ├─ hospital_service.py
+│     │  ├─ emergency_service.py
+│     │  ├─ rag_service.py
+│     │  ├─ embedding_service.py
+│     │  └─ answer_service.py
+│     │
+│     ├─ repositories/
+│     │  └─ rag_repository.py
+│     │
+│     ├─ prompts/
+│     │  └─ rag_answer_prompt.txt
+│     │
+│     ├─ ingestion/
+│     │  ├─ document_loader.py
+│     │  ├─ chunker.py
+│     │  └─ indexer.py
+│     │
+│     └─ tests/
+│        ├─ test_hospital_tools.py
+│        ├─ test_rag_tools.py
+│        └─ test_mcp_tools.py
 │
-└─ documents/
-   ├─ overall_plan.md
-   ├─ frontend_plan.md
-   ├─ backend_plan.md
-   └─ backend_technical_guide.md
+├─ documents/
+│
+├─ .gitignore
+├─ .env.example
+├─ docker-compose.yml
+└─ README.md
 ```
 
 ## 환경변수 파일 관리
@@ -549,4 +625,5 @@ PEDIATRIC_API_KEY=
 EMERGENCY_API_KEY=
 ```
 
-##
+
+
