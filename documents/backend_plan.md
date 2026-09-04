@@ -327,12 +327,7 @@ backend/
 │  ├─ test_users.json
 │  ├─ vaccinations.json
 │  └─ growth_reference.json
-├─ tests/
-├─ document/
-├─ .env
-├─ .env.example
-├─ .gitignore
-└─ requirements.txt
+
 ```
 
 Git에는 실제 `.env`를 올리지 않습니다.

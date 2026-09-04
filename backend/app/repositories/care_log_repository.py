@@ -1,0 +1,1 @@
+"""Care log database repository."""

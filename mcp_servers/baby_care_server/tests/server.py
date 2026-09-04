@@ -1,1 +1,0 @@
-print("Baby Care MCP server initialized.")

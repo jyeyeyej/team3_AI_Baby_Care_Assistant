@@ -485,11 +485,10 @@ baby-ai-agent/
 │  │     └─ baby_info_client.py
 │  │
 │  ├─ data/
-│  │  ├─ test_users.json
-│  │  ├─ vaccinations.json
-│  │  └─ growth_reference.json
-│  │
-│  └─ requirements.txt
+│     ├─ test_users.json
+│     ├─ vaccinations.json
+│     └─ growth_reference.json
+│ 
 │
 ├─ mcp_servers/
 │  │
@@ -577,6 +576,7 @@ baby-ai-agent/
 ├─ .gitignore
 ├─ .env.example
 ├─ docker-compose.yml
+├─ requirements.txt
 └─ README.md
 ```
 

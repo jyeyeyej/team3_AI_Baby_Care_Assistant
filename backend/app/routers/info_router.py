@@ -1,0 +1,1 @@
+"""Vaccination and hospital routes."""

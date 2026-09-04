@@ -1,0 +1,1 @@
+"""Stool observation service."""

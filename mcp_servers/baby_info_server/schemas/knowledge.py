@@ -1,0 +1,1 @@
+"""Knowledge search schemas."""

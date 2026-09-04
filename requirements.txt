@@ -1,0 +1,20 @@
+# Shared dependencies for frontend, backend, and MCP services.
+streamlit
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-dotenv
+python-multipart
+httpx
+requests
+SQLAlchemy
+psycopg[binary]
+pgvector
+redis
+openai
+Pillow
+mcp
+fastmcp
+pytest
+pytest-asyncio

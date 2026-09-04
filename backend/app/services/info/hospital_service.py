@@ -1,0 +1,1 @@
+"""Hospital search service."""

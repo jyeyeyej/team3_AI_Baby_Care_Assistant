@@ -1,0 +1,1 @@
+"""Reminder database model."""
