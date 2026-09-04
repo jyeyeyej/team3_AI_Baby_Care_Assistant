@@ -4,8 +4,6 @@
 
 `baby_care_agent`는 0~36개월 영유아 보호자의 질문을 이해하고, 아기 정보·육아 기록·RAG·병원 검색 결과를 조합하여 답변하는 하나의 Single Agent입니다.
 
-샘플의 Safe `order_agent`와 같은 핵심 원칙을 사용합니다.
-
 ```text
 조회·검색 Tool
 → 사용자 승인 없이 자동 실행
@@ -63,8 +61,38 @@ Tool 실행 여부는 Backend 승인 정책이 통제합니다.
         "search_development_guide",
         "search_safety_guide",
     }),
+    allowed_actions=frozenset({
+        "update_reminder_status",
+        "update_baby_profile",
+        "update_care_log",
+        "delete_care_log",
+    }),
 )
 ```
+
+### 필수 구현 범위
+
+- 아기 프로필·알레르기 확인
+- 육아 기록 저장·조회와 기록 수정·삭제 연결
+- 수유 알림 확인·10분 후·건너뛰기
+- 월령별 육아 RAG 검색
+- 사용자가 입력한 지역명 기반 소아과·응급실 검색
+- 기저귀 사진 분석
+- STT로 변환된 보호자 음성 텍스트 처리
+- Tool Allowlist·위험도·승인·중복 실행 방지
+- Agent State·Trace·채팅 원문의 Redis 저장
+- 채팅 요약의 PostgreSQL 저장
+
+### 제외 범위
+
+- 실제 로그인·본인인증
+- 실제 예방접종 조회 API
+- 휴대전화 푸시 알림과 날짜·시간 직접 지정 알림
+- 과거 채팅 원문 검색
+- 아기 울음소리·영상 분석
+- 질병 진단과 의약품 처방
+- 관리자 페이지
+- Agent끼리 서로 호출하는 Multi-Agent 구조
 
 ### 핵심 판단 흐름
 
@@ -172,6 +200,7 @@ class AgentProfile:
     example_question: str
     instructions: str
     allowed_tools: frozenset[str]
+    allowed_actions: frozenset[str]
 ```
 
 | 필드 | 역할 |
@@ -183,8 +212,9 @@ class AgentProfile:
 | `example_question` | 화면에 표시할 대표 질문 |
 | `instructions` | Tool 사용 순서·근거·안전·금지 규칙 |
 | `allowed_tools` | Agent가 발견하고 호출할 수 있는 Tool Allowlist |
+| `allowed_actions` | Agent 요청으로 실행할 수 있는 FastAPI 내부 동작 Allowlist |
 
-Agent Profile은 Agent Runtime과 분리합니다. Runtime은 Model 호출과 Tool 반복을 담당하고, Profile은 이 Agent가 무엇을 할 수 있는지를 제한합니다.
+Agent Profile은 Agent Runtime과 분리합니다. `allowed_tools`는 MCP Tool, `allowed_actions`는 FastAPI 내부 변경 기능을 제한합니다. Runtime은 두 목록과 Backend 정책에 모두 등록된 동작만 실행합니다.
 
 ---
 
@@ -242,17 +272,66 @@ Agent Profile은 Agent Runtime과 분리합니다. Runtime은 Model 호출과 To
 ### Tool 발견과 실행
 
 ```text
-Agent Runtime 시작
-→ 두 MCP 서버의 tools/list 호출
-→ Profile.allowed_tools와 교집합만 선택
-→ 필요한 Tool Schema를 OpenAI에 전달
-→ Function Call 수신
-→ arguments JSON·Allowlist·위험도 검증
-→ low이면 자동 실행
-→ medium·high이면 승인 상태 저장 후 중단
-→ Tool Result를 OpenAI에 재전달
-→ 다음 Tool 또는 최종 답변 판단
+1. Agent State 생성
+2. 두 MCP 서버의 tools/list 호출
+3. 발견된 Tool과 Profile.allowed_tools의 교집합 생성
+4. 시스템 메시지·사용자 메시지·아기 Context 구성
+5. 허용된 MCP Tool Schema와 FastAPI Action Schema를 OpenAI에 전달
+6. OpenAI Responses API 호출
+7. Function Call이 없으면 최종 답변을 저장하고 종료
+8. Function Call이 있으면 arguments·소유권·Allowlist·ACTION_POLICY 검증
+9. ACTION_POLICY의 `approval`이 `none`·`upload_action`이면 조건 확인 후 실행
+10. `direct_button`은 버튼 요청 자체를 승인으로 검증하고, `confirmation_card`는 Redis에 승인 State를 저장한 뒤 중단
+11. 사용자가 승인하면 저장된 pending_call만 한 번 실행
+12. Tool Result를 response_id와 함께 OpenAI에 전달
+13. next_step부터 Agent Loop 재개
+14. 다음 Tool 또는 최종 답변 판단
+15. MAX_AGENT_STEPS를 넘으면 안전하게 중단
 ```
+
+### 공통 Agent Loop 예시
+
+```python
+async def run_agent(state: dict) -> dict:
+    step = state.get("next_step", 0)
+
+    while step < MAX_AGENT_STEPS:
+        response = await call_openai(state)
+        state["response_id"] = response.id
+        state["llm_calls"] += 1
+
+        calls = get_function_calls(response)
+        if not calls:
+            state["status"] = "completed"
+            state["termination_reason"] = "model_finished"
+            state["answer"] = response.output_text
+            return state
+
+        for call in calls:
+            validate_allowed_action(call.name, BABY_CARE_AGENT)
+            policy = ACTION_POLICY[call.name]
+            validate_arguments_and_owner(call, state)
+
+            if needs_separate_confirmation(policy):
+                state["status"] = "waiting_approval"
+                state["termination_reason"] = "approval_required"
+                state["next_step"] = step + 1
+                state["pending_call"] = serialize_call(call)
+                state["approval_snapshot"] = make_snapshot(call)
+                await save_approval_state_to_redis(state)
+                return state
+
+            result = await execute_action(call, policy)
+            state = add_action_result(state, call, result)
+
+        step += 1
+
+    state["status"] = "stopped"
+    state["termination_reason"] = "max_steps_exceeded"
+    return state
+```
+
+`needs_separate_confirmation()`은 승인 방식을 함께 확인합니다. 예를 들어 `10분 후`와 `건너뛰기`는 사용자가 해당 버튼을 직접 누른 행동 자체가 승인이고, 기록 저장·수정·삭제는 별도의 확인 카드가 필요합니다.
 
 ---
 
@@ -290,6 +369,63 @@ Agent Runtime 시작
 | `approval_snapshot` | `dict` | 사용자에게 보여 준 변경 내용 |
 | `idempotency_key` | `str` | 중복 실행 방지 |
 | `expires_at` | `datetime` | 승인 만료 시각 |
+
+### 10.3 승인 전 저장과 승인 후 Loop 재개
+
+변경 동작을 발견하면 세 필드를 다음과 같이 사용합니다.
+
+| 필드 | 승인 전 | 승인 후 |
+|---|---|---|
+| `response_id` | Tool Call을 제안한 OpenAI 응답 ID 저장 | `previous_response_id`로 전달해 같은 실행을 이어감 |
+| `next_step` | 승인 이후 시작할 Loop 단계 저장 | 저장된 단계부터 재개해 최대 단계 제한을 유지 |
+| `pending_call` | 아직 실행하지 않은 `call_id`, 이름, arguments 저장 | Redis에 저장된 내용 그대로 검증·실행 |
+
+```text
+변경 Function Call 발견
+→ response_id 저장
+→ next_step = 현재 step + 1 저장
+→ pending_call과 approval_snapshot 저장
+→ Redis에 waiting_approval State 저장
+→ Agent Loop 중단
+
+사용자 승인
+→ Redis State 조회
+→ user_id·baby_id·TTL·Snapshot·중복 여부 재검증
+→ pending_call 한 번 실행
+→ Tool Result와 response_id를 OpenAI에 전달
+→ next_step부터 Agent Loop 재개
+→ 다음 Tool 또는 최종 답변 처리
+```
+
+```python
+async def resume_after_approval(state: dict) -> dict:
+    pending_call = state["pending_call"]
+    validate_approval_state(state)
+
+    result = await execute_once(
+        pending_call,
+        idempotency_key=state["idempotency_key"],
+    )
+
+    response = await openai_client.responses.create(
+        model=state["model"],
+        previous_response_id=state["response_id"],
+        input=[{
+            "type": "function_call_output",
+            "call_id": pending_call["call_id"],
+            "output": json.dumps(result, ensure_ascii=False),
+        }],
+        tools=get_allowed_tool_schemas(BABY_CARE_AGENT),
+    )
+
+    return await run_agent_with_response(
+        state,
+        response,
+        step=state["next_step"],
+    )
+```
+
+사용자가 거절하면 `pending_call`을 실행하지 않고 `status=rejected`, `termination_reason=user_rejected`를 저장한 뒤 종료합니다.
 
 ### 종료·중단 상태
 
@@ -396,27 +532,71 @@ await redis_client.set(
 
 ## 13. Tool 위험도 정책
 
+위험도만 따로 관리하지 않고 실행 종류·담당 서버·승인 방식을 하나의 정책에 등록합니다.
+
 ```python
-TOOL_RISK = {
-    # baby_care_server
-    "get_care_records": "low",
-    "analyze_infant_stool": "low",
-    "record_care_event": "medium",
+ACTION_POLICY = {
+    # baby_care_server MCP Tool
+    "get_care_records": {
+        "type": "mcp_tool", "server": "baby_care_server",
+        "risk": "low", "approval": "none",
+    },
+    "analyze_infant_stool": {
+        "type": "mcp_tool", "server": "baby_care_server",
+        "risk": "low", "approval": "upload_action",
+    },
+    "record_care_event": {
+        "type": "mcp_tool", "server": "baby_care_server",
+        "risk": "medium", "approval": "confirmation_card",
+    },
 
-    # baby_info_server
-    "search_pediatric_hospitals": "low",
-    "search_emergency_hospitals": "low",
-    "search_feeding_guide": "low",
-    "search_sleep_guide": "low",
-    "search_weaning_guide": "low",
-    "search_development_guide": "low",
-    "search_safety_guide": "low",
+    # baby_info_server MCP Tool
+    "search_pediatric_hospitals": {
+        "type": "mcp_tool", "server": "baby_info_server",
+        "risk": "low", "approval": "none",
+    },
+    "search_emergency_hospitals": {
+        "type": "mcp_tool", "server": "baby_info_server",
+        "risk": "low", "approval": "none",
+    },
+    "search_feeding_guide": {
+        "type": "mcp_tool", "server": "baby_info_server",
+        "risk": "low", "approval": "none",
+    },
+    "search_sleep_guide": {
+        "type": "mcp_tool", "server": "baby_info_server",
+        "risk": "low", "approval": "none",
+    },
+    "search_weaning_guide": {
+        "type": "mcp_tool", "server": "baby_info_server",
+        "risk": "low", "approval": "none",
+    },
+    "search_development_guide": {
+        "type": "mcp_tool", "server": "baby_info_server",
+        "risk": "low", "approval": "none",
+    },
+    "search_safety_guide": {
+        "type": "mcp_tool", "server": "baby_info_server",
+        "risk": "low", "approval": "none",
+    },
 
-    # FastAPI 변경 기능
-    "update_reminder_status": "medium",
-    "update_baby_profile": "high",
-    "update_care_log": "high",
-    "delete_care_log": "high",
+    # FastAPI 내부 Action
+    "update_reminder_status": {
+        "type": "backend_action", "server": "fastapi",
+        "risk": "medium", "approval": "direct_button",
+    },
+    "update_baby_profile": {
+        "type": "backend_action", "server": "fastapi",
+        "risk": "high", "approval": "confirmation_card",
+    },
+    "update_care_log": {
+        "type": "backend_action", "server": "fastapi",
+        "risk": "high", "approval": "confirmation_card",
+    },
+    "delete_care_log": {
+        "type": "backend_action", "server": "fastapi",
+        "risk": "high", "approval": "confirmation_card",
+    },
 }
 
 FORBIDDEN_TOOLS = {
@@ -429,17 +609,52 @@ FORBIDDEN_TOOLS = {
 | 위험도 | 의미 | 실행 방식 |
 |---|---|---|
 | `low` | 조회·검색·계산·사진 관찰 | 자동 실행 |
-| `medium` | 기록 저장·알림 상태 변경 | 사용자 행동 또는 확인 후 실행 |
-| `high` | 프로필·기록 수정과 삭제 | 명시적 승인 후 실행 |
+| `medium` | 기록 저장·알림 상태 변경 | `direct_button` 또는 `confirmation_card` 정책에 따라 실행 |
+| `high` | 프로필·기록 수정과 삭제 | 변경 내용을 보여준 뒤 명시적 승인 후 실행 |
 | `forbidden` | 진단·처방·타 사용자 접근 | 승인 여부와 관계없이 차단 |
+
+### 승인 방식
+
+| `approval` | 의미 | 예시 |
+|---|---|---|
+| `none` | 별도 승인 없이 자동 실행 | 기록·RAG·병원 조회 |
+| `upload_action` | 사용자가 사진을 올리고 분석 버튼을 누른 행동으로 실행 | 기저귀 사진 분석 |
+| `direct_button` | 해당 버튼 클릭 자체를 승인으로 인정 | 10분 후·건너뛰기 |
+| `confirmation_card` | 실행할 내용을 보여준 후 별도 승인 | 기록 저장·수정·삭제·프로필 수정 |
+
+### Allowlist와 정책 정합성 검사
+
+```python
+def validate_allowed_action(
+    action_name: str,
+    profile: AgentProfile,
+) -> None:
+    allowed = profile.allowed_tools | profile.allowed_actions
+
+    if action_name not in allowed:
+        raise ToolNotAllowedError(action_name)
+
+    if action_name not in ACTION_POLICY:
+        raise ActionPolicyNotFoundError(action_name)
+```
+
+실행하려는 기능은 다음 두 조건을 모두 만족해야 합니다.
+
+```text
+Agent Profile의 allowed_tools 또는 allowed_actions에 등록
++
+Backend ACTION_POLICY에 실행 위치·위험도·승인 방식 등록
+```
 
 ### 승인 흐름
 
 ```text
 Model이 변경 Tool Call 제안
 → Backend가 Tool 이름·arguments·소유권 검증
-→ 위험도를 medium 또는 high로 판정
-→ Tool을 실행하지 않고 Redis에 Snapshot 저장
+→ ACTION_POLICY의 approval 확인
+→ none·upload_action: 조건 확인 후 실행
+→ direct_button: 사용자의 해당 버튼 요청을 승인으로 검증하고 실행
+→ confirmation_card: 실행하지 않고 Redis에 Snapshot 저장
 → 사용자에게 변경 내용 표시
 → approve: Snapshot·TTL·중복 여부 재검증 후 1회 실행
 → reject: 실행하지 않고 거절 Trace 저장
