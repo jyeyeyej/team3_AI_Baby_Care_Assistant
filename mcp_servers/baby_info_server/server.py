@@ -1,0 +1,1 @@
+print("Baby Info MCP server initialized.")
