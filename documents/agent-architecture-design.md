@@ -1,33 +1,25 @@
-# AI 육아 도우미 Agent 설계서
+## `baby_care_agent` 서비스 ai 에이전트 계획서 
 
-> 기준 문서: `(복원) AI 육아 도우미 백엔드 기술 개발계획서`  
-> 작성 범위: 샘플 설계서의 5·6·7·10·11·13번 구조와 정상·비정상 시나리오만 반영
+## 프로젝트 개요
+AI Baby Care Assistant는 영유아를 돌보는 보호자가 육아 과정에서 겪는 불안과 정보 부족을 줄일 수 있도록 돕는 AI 기반 육아 지원 서비스입니다. 
 
-## 핵심 AI Agent — `baby_care_agent`
+수유, 수면, 배변, 발열, 이유식 등 매일 반복되는 육아 기록을 쉽고 체계적으로 관리하고, 기록을 바탕으로 아이의 생활 패턴과 주의가 필요한 변화를 직관적으로 확인할 수 있도록 설계합니다.
+보호자는 궁금한 상황을 자연어로 질문해 맞춤형 육아 정보를 얻고, 필요한 시점에는 병원 방문 또는 전문가 상담을 고려할 수 있는 안내를 받을 수 있습니다. 또한 가족 구성원 간 육아 기록을 공유해 돌봄 정보를 일관되게 이어갈 수 있습니다.
+궁극적으로 이 서비스는 의료 진단을 대신하기보다, 보호자가 아이의 상태를 더 잘 이해하고 일상적인 돌봄 의사결정을 자신 있게 내릴 수 있도록 돕는 신뢰할 수 있는 육아 동반자를 목표로 합니다.
 
 `baby_care_agent`는 0~36개월 영유아 보호자의 질문을 이해하고, 아기 정보·육아 기록·RAG·병원 검색 결과를 조합하여 답변하는 하나의 Single Agent입니다.
 
-샘플의 Safe `order_agent`와 같은 핵심 원칙을 사용합니다.
-
-```text
-조회·검색 Tool
-→ 사용자 승인 없이 자동 실행
-
-기록 저장·수정·삭제 Tool
-→ 실행 직전에 중단
-→ 사용자에게 실행 내용 확인
-→ 승인 후 한 번만 실행
-```
+## 핵심 AI Agent — `baby_care_agent`
 
 | 항목 | 내용 |
-|---|---|
+| --- | --- |
 | `agent_id` | `baby_care` |
 | Agent 이름 | AI 육아 도우미 |
 | Goal | 아기 정보와 육아 기록을 반영해 기록·검색·관찰·의료기관 조회를 지원한다. |
 | 대표 요청 | `서아가 방금 분유 100ml를 먹었어. 기록해 줘.` |
 | 실행 방식 | OpenAI Responses API와 MCP Tool을 사용하는 Single Agent Loop |
 | MCP 연결 | Streamable HTTP |
-| 변경 원칙 | 사용자 승인 전에는 기록을 저장·수정·삭제하지 않는다. |
+| 기록 원칙 | 텍스트·UI 기록은 검증 후 저장하고, STT로 생성된 기록만 사용자 승인 후 저장한다. |
 
 ```python
 BABY_CARE_AGENT = AgentProfile(
@@ -38,8 +30,8 @@ BABY_CARE_AGENT = AgentProfile(
         "정보 검색, 기저귀 사진 관찰과 의료기관 조회를 지원한다."
     ),
     description=(
-        "조회와 검색은 자동 실행하고 육아 기록 저장·수정·삭제는 "
-        "사용자 승인 후 실행합니다."
+        "조회와 검색은 자동 실행합니다. 텍스트·UI 기록은 검증 후 저장하고 "
+        "STT로 해석된 육아 기록만 사용자 승인 후 저장합니다."
     ),
     example_question="서아가 방금 분유 100ml를 먹었어. 기록해 줘.",
     instructions="""당신은 0~36개월 영유아 보호자를 지원하는 AI 육아 도우미입니다.
@@ -50,8 +42,10 @@ BABY_CARE_AGENT = AgentProfile(
 Tool Result에 없는 육아 기록, 병원 또는 의료정보를 만들지 마세요.
 의료 진단, 처방 또는 정상·비정상 판정을 하지 마세요.
 위험 신호가 있으면 의료기관 확인 또는 119 연락을 안내하세요.
-육아 기록 저장·수정·삭제는 사용자 승인 전에 실행하지 마세요.
-승인 후에는 저장된 Snapshot과 동일한 요청만 한 번 실행하세요.
+텍스트 채팅과 UI에서 직접 입력한 육아 기록은 입력값을 검증한 뒤 저장하세요.
+STT로 해석된 육아 기록은 사용자 승인 전에 저장하지 마세요.
+STT 승인 후에는 Redis에 저장된 Snapshot과 동일한 요청만 한 번 실행하세요.
+기록 수정·삭제는 FastAPI 일반 API에서 처리합니다.
 사용자 요청이 육아 서비스 범위와 관련 없으면 Tool을 호출하지 말고 지원 범위를 안내하세요.
 요청을 이해할 수 없으면 내용을 추측하거나 기록하지 말고 다시 입력하도록 안내하세요.
 육아 요청이지만 필수 정보가 부족하면 Tool 호출 전에 필요한 정보만 추가로 질문하세요.
@@ -70,12 +64,9 @@ Tool 실행 여부는 Backend 승인 정책이 통제합니다.
         "search_development_guide",
         "search_safety_guide",
     }),
-    allowed_actions=frozenset({
-        "update_reminder_status",
-        "update_baby_profile",
-        "update_care_log",
-        "delete_care_log",
-    }),
+    # 프로필·기록 수정·삭제와 알림 상태 변경은
+    # Frontend가 FastAPI 일반 API를 직접 호출합니다.
+    allowed_actions=frozenset(),
 )
 ```
 
@@ -88,20 +79,10 @@ Tool 실행 여부는 Backend 승인 정책이 통제합니다.
 - 사용자가 입력한 지역명 기반 소아과·응급실 검색
 - 기저귀 사진 분석
 - STT로 변환된 보호자 음성 텍스트 처리
-- Tool Allowlist·위험도·승인·중복 실행 방지
-- Agent State·Trace·채팅 원문의 Redis 저장
-- 채팅 요약의 PostgreSQL 저장
-
-### 제외 범위
-
-- 실제 로그인·본인인증
-- 실제 예방접종 조회 API
-- 휴대전화 푸시 알림과 날짜·시간 직접 지정 알림
-- 과거 채팅 원문 검색
-- 아기 울음소리·영상 분석
-- 질병 진단과 의약품 처방
-- 관리자 페이지
-- Agent끼리 서로 호출하는 Multi-Agent 구조
+- Tool Allowlist·위험도·입력 출처별 승인·중복 실행 방지
+- Agent State·Trace·최근 채팅의 Redis 저장
+- 대화 요약과 장기 Memory의 PostgreSQL `user_memories` 저장
+- FastAPI SSE를 통한 사용자용 채팅 진행 상태 연동
 
 ### 핵심 판단 흐름
 
@@ -110,13 +91,47 @@ flowchart TD
     A["사용자 요청"] --> B["세션·아기 정보 확인"]
     B --> C{"요청 유형"}
     C -->|"조회·검색"| D["Tool 자동 실행"]
-    C -->|"기록 변경"| E["승인 전 중단"]
-    E --> F{"사용자 결정"}
-    F -->|"승인"| G["Tool 한 번 실행"]
-    F -->|"거절"| H["실행 없이 종료"]
-    D --> I["근거 기반 답변"]
-    G --> I
+    C -->|"텍스트·UI 기록"| E["검증 후 기록 저장"]
+    C -->|"STT 기록"| F["승인 전 중단"]
+    F --> G{"사용자 결정"}
+    G -->|"승인"| H["Tool 한 번 실행"]
+    G -->|"거절"| I["실행 없이 종료"]
+    D --> J["근거 기반 답변"]
+    E --> J
+    H --> K["FastAPI가 저장 결과 반환"]
 ```
+
+### 기록 입력 방식과 미수유 처리
+
+```
+텍스트 입력
+→ input_source="text"
+→ 필수값 검증 후 바로 저장
+
+버튼·숫자 UI
+→ input_source="ui"
+→ 입력값 검증 후 바로 저장
+
+STT 입력
+→ input_source="stt"
+→ 실제 육아 기록이면 승인 Snapshot 생성
+→ 승인 후 Tool 한 번 실행
+→ Agent Loop 재개 없이 FastAPI 결과 반환
+```
+
+다음과 같은 미수유 표현은 feeding 기록으로 만들지 않습니다.
+
+```
+"오늘은 수유를 안 했어."
+"먹이려고 했는데 안 먹었어."
+
+→ feeding 기록 생성 없음
+→ amount_ml=0으로 자동 변환하지 않음
+→ STT 승인 Snapshot 생성 없음
+→ 마지막 수유 시각과 다음 알림 기준 변경 없음
+```
+
+`amount_ml=0`은 Care Server 계약상 유효한 값이지만, Backend가 이를 “미수유” 의미로 자동 생성하지 않습니다. 사용자가 구조화된 입력에서 명시한 경우에만 계약대로 전달할 수 있습니다.
 
 ### OpenAI 메시지 구성
 
@@ -133,7 +148,7 @@ user_message = {
 
 OpenAI에 전달할 정보:
 
-```text
+```
 Agent 시스템 메시지
 + 보호자가 입력한 사용자 메시지
 + PostgreSQL에서 조회한 아기 프로필과 알레르기
@@ -150,7 +165,7 @@ API Key, DB·Redis 접속정보, 이미지·음성 원본, 모델의 숨겨진 �
 모든 알 수 없는 요청을 같은 오류로 처리하지 않고 다음 기준으로 구분합니다.
 
 | 분류 | 처리 | Tool 실행 | `response_type` |
-|---|---|---:|---|
+| --- | --- | --- | --- |
 | 의미를 이해할 수 없는 요청 | 추측하지 않고 다시 입력하도록 안내 | X | `clarification_required` |
 | 육아와 무관한 요청 | AI 육아 도우미의 지원 범위 안내 | X | `out_of_scope` |
 | 구현하지 않은 기능 요청 | 제외 기능과 가능한 대안 안내 | X | `unsupported_feature` |
@@ -166,7 +181,8 @@ CHAT_RESPONSE_TYPES = [
     "record_confirmation",
     "hospital_list",
     "diaper_analysis",
-    "tool_approval",
+    "stt_record_approval",
+    "speech_transcription",
     "out_of_scope",
     "unsupported_feature",
     "clarification_required",
@@ -178,18 +194,19 @@ CHAT_RESPONSE_TYPES = [
 기본 범위 안내 문구:
 
 > 요청을 이해하지 못했거나 AI 육아 도우미의 지원 범위를 벗어났어요. 수유·수면·배변·성장·예방접종·육아 정보·병원 검색에 관해 질문해 주세요.
+> 
 
 ### 정상 케이스 시나리오
 
 아래 표는 이후 테스트케이스 테이블의 초안으로 사용합니다.
 
 | ID | 사전 조건 | 사용자 요청·행동 | Agent 판단 및 실행 | 예상 결과 |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | N-01 | 로그인·아기 등록 완료 | `최근 수유 기록 알려줘` | `get_care_records` 자동 실행 | 최근 확정 수유 기록과 시각 반환 |
 | N-02 | 최근 7일 기록 존재 | `요즘 수유 패턴은 어때?` | `get_care_records(query_type=pattern)` | 평균 횟수·양·간격과 기록 부족 여부 반환 |
-| N-03 | 수유 기록 요청 | `방금 분유 100ml 먹었어` | 기록 arguments 생성 후 승인 대기 | 저장하지 않고 확인 카드 반환 |
-| N-04 | N-03 승인 대기 | 사용자가 `기록하기` 선택 | Snapshot 검증 후 `record_care_event` 1회 실행 | `care_logs`에 한 건 저장, 다음 알림 계산 |
-| N-05 | N-03 승인 대기 | 사용자가 `취소` 선택 | Tool 실행 중단 | DB 변경 없이 취소 안내 |
+| N-03 | 텍스트 수유 기록 요청 | `방금 분유 100ml 먹었어` | 필수값 검증 후 `record_care_event(input_source=text)` 실행 | `care_logs`에 한 건 저장하고 다음 알림 계산 |
+| N-04 | 기록 UI 입력 완료 | 수유 방식·수유량을 직접 선택하고 저장 | `record_care_event(input_source=ui)` 실행 | 별도 확인 카드 없이 한 건 저장 |
+| N-05 | STT 기록 승인 대기 | 사용자가 `다시 말하기` 선택 | 승인 Snapshot을 폐기하고 Tool 실행 중단 | DB 변경 없이 다시 음성 입력 안내 |
 | N-06 | 수유 알림 표시 중 | `10분 후` 선택 | 알림 상태만 `snoozed`로 변경 | 기록 없이 현재 시각+10분으로 재설정 |
 | N-07 | 알림 간격 180분 | `건너뛰기` 선택 | 알림 상태를 `skipped`로 변경 | 기록 없이 “3시간 후 다시 알려드릴게요” 반환 |
 | N-08 | 아기 월령 1개월 | `이 시기 수유 간격을 알려줘` | `search_feeding_guide` 호출 | 월령·수유 방식과 출처를 반영한 답변 |
@@ -197,24 +214,24 @@ CHAT_RESPONSE_TYPES = [
 | N-10 | 지역명 입력 | `서울 동작구 소아과 찾아줘` | `search_pediatric_hospitals` | 병원 목록·주소·전화·확인 시점 반환 |
 | N-11 | 지역명 입력 | `서울 동작구 응급실 찾아줘` | `search_emergency_hospitals` | 응급실 목록과 위급 시 119 안내 |
 | N-12 | 정상 이미지 업로드 | 기저귀 변 사진 분석 요청 | `analyze_infant_stool` 자동 실행 | 관찰 결과·출처·안전 안내 반환, 임시 파일 삭제 |
-| N-13 | 음성이 텍스트로 변환됨 | `서아가 분유 100ml 먹었어` | STT 텍스트를 일반 채팅과 동일하게 처리 | 승인 카드 반환 후 승인 시 기록 |
+| N-13 | 음성이 텍스트로 변환됨 | `서아가 분유 100ml 먹었어` | 실제 육아 기록을 추출하고 STT 승인 Snapshot 생성 | 승인 후 Tool을 한 번 실행하고 Agent Loop 재개 없이 FastAPI가 저장 결과 반환 |
 | N-14 | RAG와 기록 모두 필요 | `최근 기록을 보면 수면은 괜찮아?` | 기록 조회 후 수면 RAG 호출 | 기록 요약과 일반 가이드를 구분해 답변 |
-| N-15 | 채팅 10회 도달 | 정상 대화 계속 | Redis 원문 요약 | 요약본은 PostgreSQL, 최근 문맥은 Redis 유지 |
+| N-15 | 최근 채팅 8개 또는 요약 기준 도달 | 정상 대화 계속 | 최근 대화를 사실 중심으로 요약 | `user_memories(memory_type=conversation_summary)`에 요약 저장, Redis에는 최근 8개 유지 |
 
 ### 비정상·예외 케이스 시나리오
 
 | ID | 비정상 조건 | Agent·Backend 처리 | 실행 여부 | 예상 결과 |
-|---|---|---|---:|---|
+| --- | --- | --- | --- | --- |
 | E-01 | `session_id` 없음·만료 | Agent 실행 전 차단 | X | `SESSION_INVALID` |
 | E-02 | 다른 사용자의 `baby_id` | 소유권 검증 실패 | X | 아기 정보를 노출하지 않고 `BABY_NOT_FOUND` 또는 접근 차단 |
 | E-03 | `event_type=milk` | 약속된 문자열 검증 실패 | X | Pydantic 입력 오류 |
 | E-04 | 수유량 `-100ml` | 숫자 범위 검증 실패 | X | 저장하지 않고 올바른 값 재요청 |
-| E-05 | 기록 승인 없이 실행 시도 | 위험도 정책이 Tool 차단 | X | 승인 필요 응답 반환 |
+| E-05 | STT 기록을 승인 없이 저장 시도 | `input_source=stt`와 `confirmed_by_user` 검증으로 차단 | X | 승인 필요 응답 반환 |
 | E-06 | 승인 Snapshot의 수유량 변경 | 저장된 Snapshot과 불일치 | X | `APPROVAL_MISMATCH` |
 | E-07 | 같은 승인 버튼 두 번 클릭 | `idempotency_key` 중복 확인 | 1회만 | 기존 처리 결과 반환 |
 | E-08 | 승인 TTL 10분 만료 | Redis 승인 상태 없음 | X | `APPROVAL_EXPIRED` |
 | E-09 | 허용 목록 밖 Tool 요청 | Allowlist 검사 실패 | X | `TOOL_NOT_ALLOWED` |
-| E-10 | MCP 서버 연결 실패 | Agent Loop 안전 중단 | X | `MCP_SERVER_ERROR`, 재시도 안내 |
+| E-10 | MCP 서버 연결 실패 | Agent Loop 안전 중단 | X | `MCP_SERVER_UNAVAILABLE`, 재시도 안내 |
 | E-11 | 공공데이터 API 시간 초과 | 1회 재시도 후 실패 처리 | X | 병원 정보를 지어내지 않고 오류 안내 |
 | E-12 | 병원 검색 결과 없음 | 빈 결과를 정상 결과로 처리 | O | 빈 목록과 지역명 재확인 안내 |
 | E-13 | RAG 검색 결과 없음 | 근거 없음 표시 | O | 추측하지 않고 정보 부족 안내 |
@@ -224,7 +241,7 @@ CHAT_RESPONSE_TYPES = [
 | E-17 | 변 사진에서 위험 신호 가능성 | 진단하지 않고 안전 규칙 적용 | O | 즉시 의료기관 확인 안내 |
 | E-18 | 최대 Agent 단계 초과 | Runtime이 반복 중단 | X | `max_steps_exceeded` |
 | E-19 | OpenAI 응답 오류 | Trace에 오류 요약 후 종료 | X | `model_error` |
-| E-20 | Redis 채팅 원문 TTL 임박 | 만료 전 요약 시도 | O | PostgreSQL에 요약 저장; 실패 시 Trace 기록 |
+| E-20 | Redis 채팅 원문 TTL 임박 | 만료 전 요약 시도 | O | `user_memories(memory_type=conversation_summary)`에 요약 저장; 실패 시 Trace 기록 |
 | E-21 | `아아아 1234 외계인 우유 뿅`처럼 의미를 이해할 수 없음 | 추측하지 않고 재입력 요청 | X | `UNRECOGNIZED_REQUEST`, 육아 질문 예시 안내 |
 | E-22 | `오늘 주식 종목 추천해 줘`처럼 육아와 무관함 | 범위 밖 요청으로 분류 | X | `OUT_OF_SCOPE`, 육아 지원 범위 안내 |
 | E-23 | 아기 영상·울음소리 분석 등 제외 기능 요청 | 구현하지 않은 기능으로 분류 | X | `UNSUPPORTED_FEATURE`, 가능한 기능 안내 |
@@ -237,7 +254,6 @@ CHAT_RESPONSE_TYPES = [
 
 ```python
 from dataclasses import dataclass
-
 
 @dataclass(frozen=True)
 class AgentProfile:
@@ -252,7 +268,7 @@ class AgentProfile:
 ```
 
 | 필드 | 역할 |
-|---|---|
+| --- | --- |
 | `agent_id` | API 요청과 Registry에서 Agent를 구분 |
 | `name` | 화면과 응답에 표시할 이름 |
 | `goal` | Agent가 달성해야 하는 업무 목표 |
@@ -260,9 +276,9 @@ class AgentProfile:
 | `example_question` | 화면에 표시할 대표 질문 |
 | `instructions` | Tool 사용 순서·근거·안전·금지 규칙 |
 | `allowed_tools` | Agent가 발견하고 호출할 수 있는 Tool Allowlist |
-| `allowed_actions` | Agent 요청으로 실행할 수 있는 FastAPI 내부 동작 Allowlist |
+| `allowed_actions` | 현재 빈 목록. 수정·삭제·프로필·알림 변경은 FastAPI 일반 API에서 처리 |
 
-Agent Profile은 Agent Runtime과 분리합니다. `allowed_tools`는 MCP Tool, `allowed_actions`는 FastAPI 내부 변경 기능을 제한합니다. Runtime은 두 목록과 Backend 정책에 모두 등록된 동작만 실행합니다.
+Agent Profile은 Agent Runtime과 분리합니다. 현재 Agent가 실행할 수 있는 기능은 `allowed_tools`에 등록된 MCP Tool뿐이며 `allowed_actions`는 빈 목록으로 유지합니다. 프로필·기록 수정·삭제와 알림 상태 변경은 Frontend가 FastAPI 일반 API를 직접 호출합니다. Runtime은 `allowed_tools`와 Backend 정책에 모두 등록된 Tool만 실행합니다.
 
 ---
 
@@ -273,8 +289,8 @@ Agent Profile은 Agent Runtime과 분리합니다. `allowed_tools`는 MCP Tool, 
 ### 요청별 판단 흐름
 
 | 요청 유형 | 확인할 Context | 선택 Tool | 종료 조건 |
-|---|---|---|---|
-| 육아 기록 저장 | 사용자·아기·입력 필드 | `record_care_event` | 승인 후 저장 결과 반환 |
+| --- | --- | --- | --- |
+| 육아 기록 저장 | 사용자·아기·입력 필드 | `record_care_event` | 텍스트·UI는 검증 후 저장 결과 반환, STT는 승인 후 저장 결과 반환 |
 | 최근 기록·패턴 | 사용자·아기·기간 | `get_care_records` | 조회 결과 설명 |
 | 기저귀 사진 | 월령·수유 방식·이미지 | `analyze_infant_stool` | 관찰·안전 안내 반환 |
 | 육아 지식 | 월령·수유 방식·알레르기 | 해당 RAG Tool | 출처 포함 답변 |
@@ -289,7 +305,7 @@ Agent Profile은 Agent Runtime과 분리합니다. `allowed_tools`는 MCP Tool, 
 ### 7.1 `baby_care_server` Tool
 
 | Tool | 주요 입력 | 정상 출력 | 실패·빈 결과 | 위험도 |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `record_care_event` | `baby_id`, `event_type`, `recorded_at`, 종류별 상세값, `idempotency_key` | `log_id`, 저장 시각, 다음 알림 | 검증 실패·중복·미승인 | `medium` |
 | `get_care_records` | `baby_id`, 조회 유형·기간 | 기록 목록 또는 패턴 | 기록 없음은 빈 목록·`sufficient_data=false` | `low` |
 | `analyze_infant_stool` | `baby_id`, 임시 이미지 경로, 월령·수유 방식 | 관찰·주의 신호·출처 | 품질 불량·형식 오류 | `low` |
@@ -297,7 +313,7 @@ Agent Profile은 Agent Runtime과 분리합니다. `allowed_tools`는 MCP Tool, 
 ### 7.2 `baby_info_server` Tool
 
 | Tool | 주요 입력 | 정상 출력 | 실패·빈 결과 | 위험도 |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `search_pediatric_hospitals` | `region`, `page`, `limit` | 소아과 목록·확인 시점 | 빈 지역 거부, 결과 없으면 빈 목록 | `low` |
 | `search_emergency_hospitals` | `region`, `page`, `limit` | 응급실 목록·확인 시점 | 빈 지역 거부, 결과 없으면 빈 목록 | `low` |
 | `search_feeding_guide` | `query`, `baby_age_months`, `top_k` | 수유 관련 Chunk·출처 | 결과 없으면 빈 Context | `low` |
@@ -306,34 +322,34 @@ Agent Profile은 Agent Runtime과 분리합니다. `allowed_tools`는 MCP Tool, 
 | `search_development_guide` | 동일 | 발달 관련 Chunk·출처 | 결과 없으면 빈 Context | `low` |
 | `search_safety_guide` | 동일 | 안전 관련 Chunk·출처 | 결과 없으면 빈 Context | `low` |
 
-### 7.3 FastAPI 변경 동작
+### 7.3 FastAPI 일반 API 처리
 
-다음 기능은 MCP Tool이 아니라 FastAPI 내부 기능이지만 Agent 요청으로 실행될 수 있으므로 같은 위험도 정책을 적용합니다.
+다음 기능은 Agent Tool 또는 Agent Action으로 실행하지 않습니다. Frontend가 FastAPI 일반 API를 직접 호출하고, FastAPI가 사용자·아기 소유권과 입력값을 검증한 후 처리합니다.
 
-| 동작 | 역할 | 위험도 |
-|---|---|---|
-| `update_reminder_status` | 알림 확인·10분 후·건너뛰기 | `medium` |
-| `update_baby_profile` | 아기 정보·알레르기 수정 | `high` |
-| `update_care_log` | 저장된 기록 수정 | `high` |
-| `delete_care_log` | 저장된 기록 삭제 | `high` |
+| 기능 | FastAPI API | 처리 기준 |
+| --- | --- | --- |
+| 알림 확인·10분 후·건너뛰기 | `PATCH /api/reminders/{reminder_id}` | 버튼 클릭 요청을 검증한 후 처리 |
+| 아기 정보·알레르기 수정 | `PATCH /api/babies/{baby_id}` | Frontend 입력과 소유권 검증 후 처리 |
+| 저장된 기록 수정 | `PATCH /api/care-logs/{log_id}` | Frontend 입력과 소유권 검증 후 처리 |
+| 저장된 기록 삭제 | `DELETE /api/care-logs/{log_id}` | 삭제 대상과 소유권 검증 후 처리 |
 
 ### Tool 발견과 실행
 
-```text
+```
 1. Agent State 생성
 2. 두 MCP 서버의 tools/list 호출
 3. 발견된 Tool과 Profile.allowed_tools의 교집합 생성
 4. 시스템 메시지·사용자 메시지·아기 Context 구성
-5. 허용된 MCP Tool Schema와 FastAPI Action Schema를 OpenAI에 전달
+5. 허용된 MCP Tool Schema를 OpenAI에 전달
 6. OpenAI Responses API 호출
 7. Function Call이 없으면 최종 답변을 저장하고 종료
 8. Function Call이 있으면 arguments·소유권·Allowlist·ACTION_POLICY 검증
-9. ACTION_POLICY의 `approval`이 `none`·`upload_action`이면 조건 확인 후 실행
-10. `direct_button`은 버튼 요청 자체를 승인으로 검증하고, `confirmation_card`는 Redis에 승인 State를 저장한 뒤 중단
-11. 사용자가 승인하면 저장된 pending_call만 한 번 실행
-12. Tool Result를 response_id와 함께 OpenAI에 전달
-13. next_step부터 Agent Loop 재개
-14. 다음 Tool 또는 최종 답변 판단
+9. ACTION_POLICY와 `input_source`를 함께 확인
+10. 조회·검색과 텍스트·UI 기록은 검증 후 실행
+11. STT 기록은 Redis에 승인 State를 저장한 뒤 현재 Agent 실행을 종료
+12. 승인 API가 저장된 pending_call·Snapshot·TTL·소유권·중복 여부를 검증
+13. 승인되면 pending_call을 한 번 실행하고 Agent Loop는 재개하지 않음
+14. FastAPI가 Tool 실행 결과를 Frontend에 반환
 15. MAX_AGENT_STEPS를 넘으면 안전하게 중단
 ```
 
@@ -360,13 +376,15 @@ async def run_agent(state: dict) -> dict:
             policy = ACTION_POLICY[call.name]
             validate_arguments_and_owner(call, state)
 
-            if needs_separate_confirmation(policy):
-                state["status"] = "waiting_approval"
-                state["termination_reason"] = "approval_required"
-                state["next_step"] = step + 1
+            if needs_stt_confirmation(policy, state.get("input_source")):
+                state["status"] = "waiting_stt_approval"
+                state["termination_reason"] = "stt_approval_required"
                 state["pending_call"] = serialize_call(call)
                 state["approval_snapshot"] = make_snapshot(call)
-                await save_approval_state_to_redis(state)
+                await save_stt_approval_to_redis(state)
+                # 현재 Agent 실행은 여기서 종료합니다.
+                # 승인 후에는 Agent Loop를 재개하지 않고
+                # 승인 API가 pending_call만 한 번 실행합니다.
                 return state
 
             result = await execute_action(call, policy)
@@ -379,7 +397,7 @@ async def run_agent(state: dict) -> dict:
     return state
 ```
 
-`needs_separate_confirmation()`은 승인 방식을 함께 확인합니다. 예를 들어 `10분 후`와 `건너뛰기`는 사용자가 해당 버튼을 직접 누른 행동 자체가 승인이고, 기록 저장·수정·삭제는 별도의 확인 카드가 필요합니다.
+`needs_stt_confirmation()`은 `record_care_event`의 입력 출처를 확인합니다. 텍스트·UI 기록은 별도 승인 없이 실행하고, STT가 실제 `care_logs` 저장으로 이어지는 경우에만 확인 카드를 반환합니다. 승인 후에는 Agent Loop를 재개하지 않고 승인 API가 Redis Snapshot의 `pending_call`만 한 번 실행합니다. 알림의 `확인`·`10분 후`·`건너뛰기`는 Frontend가 FastAPI 일반 API를 직접 호출합니다.
 
 ---
 
@@ -388,7 +406,7 @@ async def run_agent(state: dict) -> dict:
 ### 10.1 기본 State
 
 | 필드 | 타입 | 역할 |
-|---|---|---|
+| --- | --- | --- |
 | `agent_id` | `str` | 실행 Agent 구분 |
 | `agent_name` | `str` | 화면 표시 이름 |
 | `goal` | `str` | Agent 목표 |
@@ -398,89 +416,73 @@ async def run_agent(state: dict) -> dict:
 | `request_id` | `str` | API 요청 추적 |
 | `question` | `str` | 사용자 요청 |
 | `model` | `str` | OpenAI Model |
-| `status` | `str` | `running`, `waiting_approval`, `completed`, `rejected`, `failed`, `stopped` |
+| `status` | `str` | `running`, `waiting_stt_approval`, `completed`, `rejected`, `failed`, `stopped` |
 | `termination_reason` | `str | None` | 완료·실패·중단 이유 |
 | `llm_calls` | `int` | LLM 호출 횟수 |
 | `tool_calls` | `int` | 실제 Tool 실행 횟수 |
 | `trace` | `list[dict]` | 실행 사건 목록 |
 | `answer` | `str | None` | 최종 답변 |
 
-### 10.2 승인 State
+### 10.2 STT 승인 State
+
+STT에서 실제 육아 기록이 추출된 경우에만 다음 State를 Redis에 저장합니다. 승인 후 Agent Loop를 재개하지 않으므로 `response_id`와 `next_step`은 저장하지 않습니다.
 
 | 필드 | 타입 | 역할 |
-|---|---|---|
-| `run_id` | `str` | 승인 전후 같은 실행 식별 |
+| --- | --- | --- |
+| `user_id` | `str` | 승인 요청 보호자 식별 |
+| `baby_id` | `str` | 기록 대상 아기와 소유권 확인 |
+| `session_id` | `str` | 현재 대화 식별 |
+| `request_id` | `str` | 승인 전후 요청 추적 |
 | `tool_call_id` | `str` | 승인할 Tool Call 식별 |
-| `response_id` | `str` | 이전 OpenAI 응답에서 재개 |
-| `next_step` | `int` | 재개할 Agent Loop 단계 |
 | `pending_call` | `dict` | 실행 전 Tool 이름과 arguments |
-| `approval_snapshot` | `dict` | 사용자에게 보여 준 변경 내용 |
+| `approval_snapshot` | `dict` | 사용자에게 보여 준 기록 내용 |
 | `idempotency_key` | `str` | 중복 실행 방지 |
+| `status` | `str` | `waiting_stt_approval` |
 | `expires_at` | `datetime` | 승인 만료 시각 |
 
-### 10.3 승인 전 저장과 승인 후 Loop 재개
+### 10.3 STT 승인 전 저장과 승인 후 Tool 실행
 
-변경 동작을 발견하면 세 필드를 다음과 같이 사용합니다.
+이 프로젝트는 **B 방식**을 사용합니다. STT 승인 전 Agent 실행을 종료하고, 승인 후에는 Agent Loop를 재개하지 않습니다.
 
-| 필드 | 승인 전 | 승인 후 |
-|---|---|---|
-| `response_id` | Tool Call을 제안한 OpenAI 응답 ID 저장 | `previous_response_id`로 전달해 같은 실행을 이어감 |
-| `next_step` | 승인 이후 시작할 Loop 단계 저장 | 저장된 단계부터 재개해 최대 단계 제한을 유지 |
-| `pending_call` | 아직 실행하지 않은 `call_id`, 이름, arguments 저장 | Redis에 저장된 내용 그대로 검증·실행 |
-
-```text
-변경 Function Call 발견
-→ response_id 저장
-→ next_step = 현재 step + 1 저장
+```
+STT에서 실제 육아 기록 Function Call 발견
 → pending_call과 approval_snapshot 저장
-→ Redis에 waiting_approval State 저장
-→ Agent Loop 중단
+→ Redis에 waiting_stt_approval State 저장
+→ 현재 Agent 실행 종료
 
 사용자 승인
-→ Redis State 조회
-→ user_id·baby_id·TTL·Snapshot·중복 여부 재검증
-→ pending_call 한 번 실행
-→ Tool Result와 response_id를 OpenAI에 전달
-→ next_step부터 Agent Loop 재개
-→ 다음 Tool 또는 최종 답변 처리
+→ Redis stt_approval State 조회
+→ user_id·baby_id·session_id·request_id·tool_call_id 검증
+→ TTL·Snapshot·중복 여부 재검증
+→ Redis에 저장된 pending_call 한 번 실행
+→ Agent Loop를 재개하지 않음
+→ FastAPI가 Tool 실행 결과를 Frontend에 반환
 ```
 
 ```python
-async def resume_after_approval(state: dict) -> dict:
-    pending_call = state["pending_call"]
-    validate_approval_state(state)
+async def execute_after_stt_approval(state: dict) -> dict:
+    validate_stt_approval_state(state)
 
     result = await execute_once(
-        pending_call,
+        state["pending_call"],
         idempotency_key=state["idempotency_key"],
     )
 
-    response = await openai_client.responses.create(
-        model=state["model"],
-        previous_response_id=state["response_id"],
-        input=[{
-            "type": "function_call_output",
-            "call_id": pending_call["call_id"],
-            "output": json.dumps(result, ensure_ascii=False),
-        }],
-        tools=get_allowed_tool_schemas(BABY_CARE_AGENT),
-    )
-
-    return await run_agent_with_response(
-        state,
-        response,
-        step=state["next_step"],
-    )
+    return {
+        "status": "success",
+        "data": result,
+        "request_id": state["request_id"],
+    }
 ```
 
-사용자가 거절하면 `pending_call`을 실행하지 않고 `status=rejected`, `termination_reason=user_rejected`를 저장한 뒤 종료합니다.
+사용자가 거절하면 `pending_call`을 실행하지 않고 `status=rejected`, `termination_reason=user_rejected`를 저장한 뒤 종료합니다. 중복 승인은 기존 처리 결과를 반환하고 Tool을 다시 실행하지 않습니다.
 
 ### 종료·중단 상태
 
 | 상황 | `status` | `termination_reason` |
-|---|---|---|
+| --- | --- | --- |
 | Tool Call 없이 최종 답변 | `completed` | `model_finished` |
-| 사용자 승인 대기 | `waiting_approval` | `approval_required` |
+| 사용자 승인 대기 | `waiting_stt_approval` | `stt_approval_required` |
 | 사용자 거절 | `rejected` | `user_rejected` |
 | OpenAI 오류 | `failed` | `model_error` |
 | MCP 오류 | `failed` | `mcp_tool_error` |
@@ -496,7 +498,7 @@ Trace는 모델의 숨겨진 생각을 저장하는 것이 아니라 실제로 �
 ### Trace `owner`
 
 | `owner` | 기록 예시 |
-|---|---|
+| --- | --- |
 | `runtime` | Agent 시작·완료·오류·최대 단계 초과 |
 | `ai_agent` | Tool 선택·최종 답변 생성 |
 | `mcp` | Tool 발견·호출·결과 반환 |
@@ -506,21 +508,21 @@ Trace는 모델의 숨겨진 생각을 저장하는 것이 아니라 실제로 �
 ```json
 [
   {"owner":"runtime","stage":"run_started"},
-  {"owner":"ai_agent","stage":"model_selected_tool","tool":"record_care_event"},
-  {"owner":"policy","stage":"paused_for_approval"},
-  {"owner":"human","stage":"change_approved"},
-  {"owner":"mcp","stage":"approved_change_executed"},
-  {"owner":"ai_agent","stage":"model_final_answer"}
+  {"owner":"ai_agent","stage":"model_selected_tool","tool":"record_care_event","input_source":"stt"},
+  {"owner":"policy","stage":"paused_for_stt_approval"},
+  {"owner":"human","stage":"stt_record_approved"},
+  {"owner":"mcp","stage":"approved_record_executed"},
+  {"owner":"runtime","stage":"run_completed"}
 ]
 ```
 
 ### Redis Key
 
 | Redis Key | 저장 내용 | TTL |
-|---|---|---:|
-| `session:{user_id}:{session_id}` | Agent 상태·현재 단계 | 1시간 |
-| `chat:{user_id}:{session_id}` | 현재 채팅 사용자·AI 원문 | 1시간 |
-| `tool_approval:{user_id}:{session_id}:{tool_call_id}` | 승인 Snapshot·대기 State | 10분 |
+| --- | --- | --- |
+| `session:{user_id}:{session_id}` | Agent 상태·현재 단계 | 1일 Sliding TTL |
+| `chat:{user_id}:{session_id}` | 최근 사용자·AI 메시지 최대 8개 | 1일 Sliding TTL |
+| `stt_approval:{user_id}:{session_id}:{tool_call_id}` | 승인 Snapshot·대기 State | 10분 |
 | `idempotency:{user_id}:{session_id}:{key}` | 처리 여부와 기존 결과 | 1일 |
 | `trace:{user_id}:{session_id}:{request_id}` | Agent·MCP 실행 Trace 요약 | 1일 |
 | `reminder:{user_id}:{baby_id}` | 현재 수유 알림 상태 | 1일 |
@@ -537,8 +539,8 @@ Trace는 모델의 숨겨진 생각을 저장하는 것이 아니라 실제로 �
   "baby_id": "baby-001",
   "user_request_summary": "분유 100ml 기록 요청",
   "selected_tools": ["record_care_event"],
-  "execution_order": ["approval", "record_care_event"],
-  "tool_result_summary": "승인 후 수유 기록 1건 저장",
+  "execution_order": ["stt_approval", "record_care_event"],
+  "tool_result_summary": "STT 승인 후 수유 기록 1건 저장",
   "status": "success",
   "elapsed_ms": 920,
   "error_code": null
@@ -557,13 +559,13 @@ await redis_client.set(
 
 ### 채팅 원문과 요약
 
-```text
+```
 사용자 메시지 → Redis chat Key에 저장
 → AI 답변을 같은 Key에 추가
-→ 대화 10회·길이 기준·로그아웃 전 요약
-→ OpenAI가 사실 중심 요약 생성
-→ PostgreSQL conversation_summaries 저장
-→ Redis에는 최신 요약과 최근 메시지만 유지
+→ 최근 메시지는 최대 8개 유지
+→ 대화 길이·세션 종료 등 요약 기준에 도달하면 사실 중심 요약 생성
+→ PostgreSQL user_memories에 memory_type="conversation_summary"로 저장
+→ Redis에는 최근 메시지만 유지하고 새 대화마다 TTL을 1일로 갱신
 → 원문은 TTL 만료 후 삭제
 ```
 
@@ -595,7 +597,7 @@ ACTION_POLICY = {
     },
     "record_care_event": {
         "type": "mcp_tool", "server": "baby_care_server",
-        "risk": "medium", "approval": "confirmation_card",
+        "risk": "medium", "approval": "source_based",
     },
 
     # baby_info_server MCP Tool
@@ -628,23 +630,8 @@ ACTION_POLICY = {
         "risk": "low", "approval": "none",
     },
 
-    # FastAPI 내부 Action
-    "update_reminder_status": {
-        "type": "backend_action", "server": "fastapi",
-        "risk": "medium", "approval": "direct_button",
-    },
-    "update_baby_profile": {
-        "type": "backend_action", "server": "fastapi",
-        "risk": "high", "approval": "confirmation_card",
-    },
-    "update_care_log": {
-        "type": "backend_action", "server": "fastapi",
-        "risk": "high", "approval": "confirmation_card",
-    },
-    "delete_care_log": {
-        "type": "backend_action", "server": "fastapi",
-        "risk": "high", "approval": "confirmation_card",
-    },
+    # 프로필·기록 수정·삭제와 알림 상태 변경은
+    # Agent Action이 아니라 FastAPI 일반 API가 처리합니다.
 }
 
 FORBIDDEN_TOOLS = {
@@ -655,20 +642,18 @@ FORBIDDEN_TOOLS = {
 ```
 
 | 위험도 | 의미 | 실행 방식 |
-|---|---|---|
+| --- | --- | --- |
 | `low` | 조회·검색·계산·사진 관찰 | 자동 실행 |
-| `medium` | 기록 저장·알림 상태 변경 | `direct_button` 또는 `confirmation_card` 정책에 따라 실행 |
-| `high` | 프로필·기록 수정과 삭제 | 변경 내용을 보여준 뒤 명시적 승인 후 실행 |
+| `medium` | 육아 기록 저장 | 입력 출처에 따라 텍스트·UI는 즉시 실행하고 STT는 승인 후 실행 |
 | `forbidden` | 진단·처방·타 사용자 접근 | 승인 여부와 관계없이 차단 |
 
 ### 승인 방식
 
 | `approval` | 의미 | 예시 |
-|---|---|---|
-| `none` | 별도 승인 없이 자동 실행 | 기록·RAG·병원 조회 |
+| --- | --- | --- |
+| `none` | 별도 승인 없이 자동 실행 | 기록 조회·RAG·병원 조회 |
 | `upload_action` | 사용자가 사진을 올리고 분석 버튼을 누른 행동으로 실행 | 기저귀 사진 분석 |
-| `direct_button` | 해당 버튼 클릭 자체를 승인으로 인정 | 10분 후·건너뛰기 |
-| `confirmation_card` | 실행할 내용을 보여준 후 별도 승인 | 기록 저장·수정·삭제·프로필 수정 |
+| `source_based` | 입력 출처에 따라 승인 여부 결정 | 텍스트·UI 기록은 즉시 실행, STT 기록은 확인 후 실행 |
 
 ### Allowlist와 정책 정합성 검사
 
@@ -677,7 +662,7 @@ def validate_allowed_action(
     action_name: str,
     profile: AgentProfile,
 ) -> None:
-    allowed = profile.allowed_tools | profile.allowed_actions
+    allowed = profile.allowed_tools
 
     if action_name not in allowed:
         raise ToolNotAllowedError(action_name)
@@ -688,37 +673,32 @@ def validate_allowed_action(
 
 실행하려는 기능은 다음 두 조건을 모두 만족해야 합니다.
 
-```text
-Agent Profile의 allowed_tools 또는 allowed_actions에 등록
+```
+Agent Profile의 allowed_tools에 등록
 +
 Backend ACTION_POLICY에 실행 위치·위험도·승인 방식 등록
 ```
 
 ### 승인 흐름
 
-```text
-Model이 변경 Tool Call 제안
-→ Backend가 Tool 이름·arguments·소유권 검증
-→ ACTION_POLICY의 approval 확인
-→ none·upload_action: 조건 확인 후 실행
-→ direct_button: 사용자의 해당 버튼 요청을 승인으로 검증하고 실행
-→ confirmation_card: 실행하지 않고 Redis에 Snapshot 저장
-→ 사용자에게 변경 내용 표시
-→ approve: Snapshot·TTL·중복 여부 재검증 후 1회 실행
-→ reject: 실행하지 않고 거절 Trace 저장
+```
+Model이 MCP Tool Call 제안
+→ Backend가 Tool 이름·arguments·사용자·아기 소유권 검증
+→ ACTION_POLICY의 approval과 input_source 확인
+→ none: 별도 승인 없이 실행
+→ upload_action: 이미지 업로드·분석 요청을 확인하고 실행
+→ source_based + text·ui: 필수값 검증 후 즉시 실행
+→ source_based + stt + 실제 육아 기록: Redis에 STT 승인 Snapshot 저장 후 현재 Agent 실행 종료
+→ source_based + stt + 미수유 표현: 기록과 승인 Snapshot을 생성하지 않음
+→ 사용자 승인: Snapshot·TTL·소유권·중복 여부 재검증 후 pending_call 1회 실행
+→ Agent Loop를 재개하지 않고 FastAPI가 Tool 결과 반환
+→ 사용자 거절: 실행하지 않고 거절 Trace 저장
 ```
 
-승인 API가 실행할 때는 클라이언트가 다시 보낸 Tool arguments를 신뢰하지 않고 Redis에 저장한 Snapshot을 사용합니다.
+STT 승인 API가 실행할 때는 클라이언트가 다시 보낸 Tool arguments를 신뢰하지 않고 Redis에 저장한 Snapshot과 pending_call을 사용합니다. 승인 후에는 Agent Loop를 재개하지 않습니다.
 
-```text
+```
 call_key = user_id + session_id + tool_call_id
 ```
 
 동일한 `call_key`가 이미 처리됐다면 Tool을 다시 실행하지 않고 기존 결과를 반환합니다. Agent Instructions는 행동을 안내하지만 보안 경계가 아니며, 최종 실행 여부는 Backend Policy가 결정합니다.
-
----
-
-## 참고 자료
-
-- [AI 육아 도우미 백엔드 기술 개발계획서](https://app.notion.com/p/AI-3d081f16897680b4ada6e0b60cb6981a)
-- 첨부 샘플: `01_agent-architecture-design-sample.md`
