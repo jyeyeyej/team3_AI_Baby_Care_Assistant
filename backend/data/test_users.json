@@ -1,1 +1,27 @@
-[]
+[
+  {
+    "user_id": "user-001",
+    "guardian_name": "서아 보호자",
+    "baby_id": "baby-001"
+  },
+  {
+    "user_id": "user-002",
+    "guardian_name": "민준 보호자",
+    "baby_id": "baby-002"
+  },
+  {
+    "user_id": "user-003",
+    "guardian_name": "지우 보호자",
+    "baby_id": "baby-003"
+  },
+  {
+    "user_id": "user-004",
+    "guardian_name": "신규 보호자",
+    "baby_id": null
+  },
+  {
+    "user_id": "user-005",
+    "guardian_name": "신규 보호자",
+    "baby_id": null
+  }
+]
