@@ -35,6 +35,7 @@ def init_session() -> None:
         "editing_record_index": None,
         "pending_stt_tool_call_id": None,
         "chat_draft": "",
+        "pending_voice_draft": "",
         "pending_chat_message": "",
         "voice_transcript": "",
         "last_voice_audio_signature": "",

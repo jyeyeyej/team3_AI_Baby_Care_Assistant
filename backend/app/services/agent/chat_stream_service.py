@@ -3,7 +3,7 @@
 import json
 from collections.abc import AsyncIterator
 
-from .agent_service import answer_chat, classify_category
+from .agent_service import answer_chat
 
 def _event(name: str, data: dict) -> str:
     return f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -12,8 +12,6 @@ async def stream_chat(request, app) -> AsyncIterator[str]:
     yield _event("received", {"status": "received"})
     yield _event("loading_context", {"status": "loading_context"})
     yield _event("analyzing_request", {"status": "analyzing_request"})
-    if classify_category(request.message):
-        yield _event("using_tool", {"status": "using_tool", "tool": "knowledge_search"})
     yield _event("generating_answer", {"status": "generating_answer"})
     try:
         result = await answer_chat(request, app)

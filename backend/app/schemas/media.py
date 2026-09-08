@@ -14,6 +14,7 @@ class SttApprovalRequest(BaseModel):
 
 class SttApprovalData(BaseModel):
     transcript: str | None = None
+    response_type: Literal["speech_transcription", "stt_record_approval"] | None = None
     tool_call_id: str | None = None
     record: dict | None = None
 

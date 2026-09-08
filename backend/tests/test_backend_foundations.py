@@ -1,10 +1,14 @@
 from datetime import date
+from unittest.mock import AsyncMock
+
+import pytest
 
 from app.core.api_response import success
 from app.mcp_clients.baby_info_client import validate_hospital_result, validate_knowledge_result
 from app.models.baby import Baby
 from app.repositories.vaccination_repository import load_schedule
 from app.services.care.growth_service import build_growth_information
+from app.services.agent import agent_service
 from app.services.info.vaccination_service import get_vaccinations
 
 
@@ -62,3 +66,33 @@ def test_info_mcp_rejects_a_success_response_with_wrong_category():
         assert "카테고리" in str(exc)
     else:
         raise AssertionError("wrong MCP category must be rejected")
+
+
+@pytest.mark.asyncio
+async def test_general_baby_questions_receive_safe_guidance(monkeypatch):
+    monkeypatch.setattr(agent_service, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(agent_service, "AsyncOpenAI", lambda **_: type("Client", (), {})())
+
+    # Network is intentionally unavailable in tests; the user-safe fallback must still answer.
+    answer = await agent_service.generate_general_baby_guidance("아기 목욕은 언제 시키면 좋아?")
+    assert "월령" in answer
+    assert "의료기관" in answer
+
+
+@pytest.mark.asyncio
+async def test_sleep_crying_question_is_semantically_routed_to_the_sleep_guide(monkeypatch):
+    classifier = AsyncMock(return_value=agent_service.IntentClassification(
+        category="sleep", intent="guidance", is_medical_urgent=False
+    ))
+    monkeypatch.setattr(agent_service, "classify_intent", classifier)
+
+    assert await agent_service.classify_category("아기가 자다가 우는데 뭐 때문이야?") == "sleep"
+    classifier.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_general_baby_category_is_not_rejected(monkeypatch):
+    monkeypatch.setattr(agent_service, "classify_intent", AsyncMock(return_value=agent_service.IntentClassification(
+        category="general_baby", intent="guidance", is_medical_urgent=False
+    )))
+    assert await agent_service.classify_category("아기 목욕은 언제 시키면 좋아?") == "general_baby"

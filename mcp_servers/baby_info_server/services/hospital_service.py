@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Any, Literal
+from urllib.parse import unquote
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -7,6 +8,20 @@ import httpx
 from schemas.hospital import EmergencyHospital, HospitalToolResponse, PediatricHospital
 
 HospitalKind = Literal["pediatric", "emergency"]
+
+# 국민건강보험공단 의료기관 API의 시·도 코드. 세부 구·군 코드는 API마다
+# 달라서 지역명 주소 필터로 처리한다.
+SIDO_CODES = {
+    "서울특별시": "110000", "부산광역시": "210000", "대구광역시": "220000",
+    "인천광역시": "230000", "광주광역시": "240000", "대전광역시": "250000",
+    "울산광역시": "260000", "세종특별자치시": "290000", "경기도": "310000",
+    "강원특별자치도": "320000", "충청북도": "330000", "충청남도": "340000",
+    "전북특별자치도": "350000", "전라남도": "360000", "경상북도": "370000",
+    "경상남도": "380000", "제주특별자치도": "390000",
+}
+PEDIATRIC_DEPARTMENT_CODE = "11"
+PEDIATRIC_BATCH_SIZE = 100
+PEDIATRIC_TIMEOUT_SECONDS = 20.0
 
 
 class ExternalApiError(RuntimeError):
@@ -44,18 +59,19 @@ class HospitalService:
         if not base_url or not api_key:
             raise ExternalApiError("공공데이터 API 설정이 필요합니다.")
 
-        params = {
-            "serviceKey": api_key,
-            "region": region,
-            "page": page,
-            "limit": limit,
-            "type": kind,
-            "_type": "json",
-        }
-        payload = await self._request(base_url, params)
+        provider_limit = max(limit, PEDIATRIC_BATCH_SIZE) if kind == "pediatric" else limit
+        params = self._build_params(kind, api_key, region, page, provider_limit)
+        payload = await self._request(
+            base_url,
+            params,
+            timeout_seconds=max(self.timeout_seconds, PEDIATRIC_TIMEOUT_SECONDS)
+            if kind == "pediatric"
+            else self.timeout_seconds,
+        )
 
         raw_items = self._extract_items(payload)
-        items = self._normalize_items(kind, raw_items)
+        raw_items = self._filter_region(kind, raw_items, region)
+        items = self._normalize_items(kind, raw_items)[:limit]
         notice = (
             "운영시간과 진료 가능 여부는 방문 전 의료기관에 확인해 주세요."
             if kind == "pediatric"
@@ -68,12 +84,58 @@ class HospitalService:
             notice=notice,
         ).model_dump(mode="json")
 
-    async def _request(self, base_url: str, params: dict[str, Any]) -> Any:
+    @staticmethod
+    def _build_params(
+        kind: HospitalKind, api_key: str, region: str, page: int, limit: int
+    ) -> dict[str, Any]:
+        """Build the documented, provider-specific request shape."""
+        province, district = HospitalService._split_region(region)
+        # 공공데이터포털 키는 .env에 URL 인코딩된 형태로 저장되는 경우가 많다.
+        # httpx가 query parameter를 인코딩하므로 먼저 한 번만 원문으로 되돌린다.
+        common = {
+            "serviceKey": unquote(api_key),
+            "pageNo": page,
+            "numOfRows": limit,
+            "_type": "json",
+        }
+        if kind == "emergency":
+            return {**common, "Q0": province, "Q1": district, "QZ": "A", "ORD": "ADDR"}
+        code = SIDO_CODES.get(province)
+        return {
+            **common,
+            "dgsbjtCd": PEDIATRIC_DEPARTMENT_CODE,
+            **({"sidoCd": code} if code else {}),
+        }
+
+    @staticmethod
+    def _split_region(region: str) -> tuple[str, str]:
+        parts = region.split(maxsplit=1)
+        return parts[0], parts[1] if len(parts) > 1 else ""
+
+    @staticmethod
+    def _filter_region(kind: HospitalKind, rows: list[dict[str, Any]], region: str) -> list[dict[str, Any]]:
+        """Keep the requested locality after the provider's specialty filter."""
+        province, district = HospitalService._split_region(region)
+        filtered: list[dict[str, Any]] = []
+        for row in rows:
+            address = HospitalService._text(row, "address", "dutyAddr", "addr") or ""
+            if province not in address or (district and district not in address):
+                continue
+            filtered.append(row)
+        return filtered
+
+    async def _request(
+        self, base_url: str, params: dict[str, Any], *, timeout_seconds: float | None = None
+    ) -> Any:
         """일시적인 네트워크 오류만 제한적으로 재시도합니다."""
         last_error: Exception | None = None
         for attempt in range(self.retry_count + 1):
             try:
-                async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                # hospInfoServicev2는 실제 제공 주소로 302를 반환한다. 공공 API의
+                # 정상 리다이렉트를 따라가야 HTTP 302가 백엔드의 503으로 변환되지 않는다.
+                async with httpx.AsyncClient(
+                    timeout=timeout_seconds or self.timeout_seconds, follow_redirects=True
+                ) as client:
                     response = await client.get(base_url, params=params)
                 if response.status_code == 429:
                     raise RateLimitError("공공데이터 API 호출 한도를 초과했습니다.")
@@ -126,11 +188,11 @@ class HospitalService:
     def _normalize_items(kind: HospitalKind, rows: list[dict[str, Any]]) -> list[PediatricHospital | EmergencyHospital]:
         result: list[PediatricHospital | EmergencyHospital] = []
         for row in rows:
-            name = HospitalService._text(row, "hospital_name", "dutyName", "name")
+            name = HospitalService._text(row, "hospital_name", "dutyName", "yadmNm", "name")
             address = HospitalService._text(row, "address", "dutyAddr", "addr")
             if not name or not address:
                 continue
-            phone = HospitalService._text(row, "phone", "dutyTel1", "tel")
+            phone = HospitalService._text(row, "phone", "dutyTel1", "telno", "tel")
             if kind == "pediatric":
                 result.append(PediatricHospital(
                     hospital_name=name,

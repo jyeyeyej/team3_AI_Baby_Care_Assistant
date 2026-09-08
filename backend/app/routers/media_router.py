@@ -57,14 +57,29 @@ async def transcribe_audio(
     event = extract_feeding(transcript)
     request_id = str(uuid4())
     if event is None:
-        return {"success": True, "message": "음성을 텍스트로 변환했습니다.", "request_id": request_id, "data": {"transcript": transcript}}
+        return {
+            "success": True,
+            "message": "음성을 텍스트로 변환했습니다.",
+            "request_id": request_id,
+            "data": {"transcript": transcript, "response_type": "speech_transcription"},
+        }
     tool_call_id = str(uuid4())
     snapshot = {"user_id": user_id, "baby_id": baby_id, "session_id": session_id, "request_id": request_id, "tool_call_id": tool_call_id,
                 "pending_call": {"name": "record_care_event", "arguments": {"baby_id": baby_id, **event}}, "approval_snapshot": event,
                 "idempotency_key": f"{session_id}-{tool_call_id}", "status": "waiting_stt_approval",
                 "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=STT_APPROVAL_TTL_SECONDS)).isoformat()}
     await request.app.state.redis.set(f"stt_approval:{user_id}:{session_id}:{tool_call_id}", json.dumps(snapshot, ensure_ascii=False), ex=STT_APPROVAL_TTL_SECONDS)
-    return {"success": True, "message": "기록 내용을 확인해 주세요.", "request_id": request_id, "data": {"transcript": transcript, "tool_call_id": tool_call_id, "record": event}}
+    return {
+        "success": True,
+        "message": "기록 내용을 확인해 주세요.",
+        "request_id": request_id,
+        "data": {
+            "transcript": transcript,
+            "response_type": "stt_record_approval",
+            "tool_call_id": tool_call_id,
+            "record": event,
+        },
+    }
 
 
 @router.post("/images/diaper-analysis", response_model=DiaperAnalysisResponse)

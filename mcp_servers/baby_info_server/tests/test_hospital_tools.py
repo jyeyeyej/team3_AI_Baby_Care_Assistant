@@ -55,6 +55,43 @@ def test_extract_and_normalize_pediatric_items() -> None:
     assert items[0].operating_hours is None
 
 
+def test_provider_specific_request_parameters_and_region_filtering() -> None:
+    pediatric = HospitalService._build_params(
+        "pediatric", "key", "서울특별시 동작구", page=2, limit=10
+    )
+    emergency = HospitalService._build_params(
+        "emergency", "key", "서울특별시 동작구", page=2, limit=10
+    )
+
+    assert pediatric["pageNo"] == 2
+    assert pediatric["numOfRows"] == 10
+    assert pediatric["sidoCd"] == "110000"
+    assert pediatric["dgsbjtCd"] == "11"
+    assert emergency["Q0"] == "서울특별시"
+    assert emergency["Q1"] == "동작구"
+    assert emergency["QZ"] == "A"
+    assert emergency["ORD"] == "ADDR"
+
+    encoded_key = HospitalService._build_params("pediatric", "abc%2Fdef%3D", "서울특별시", 1, 10)
+    assert encoded_key["serviceKey"] == "abc/def="
+
+    rows = [
+        {"yadmNm": "예시소아과", "addr": "서울특별시 동작구 예시로 1"},
+        {"yadmNm": "소아과 진료 병원", "addr": "서울특별시 동작구 예시로 2"},
+        {"yadmNm": "다른소아과", "addr": "서울특별시 강남구 예시로 3"},
+    ]
+    filtered = HospitalService._filter_region("pediatric", rows, "서울특별시 동작구")
+    assert filtered == rows[:2]
+
+
+def test_normalize_pediatric_nhis_field_names() -> None:
+    items = HospitalService._normalize_items(
+        "pediatric", [{"yadmNm": "예시소아과", "addr": "서울특별시 동작구", "telno": "02-123"}]
+    )
+    assert items[0].hospital_name == "예시소아과"
+    assert items[0].phone == "02-123"
+
+
 def test_normalize_emergency_keeps_only_emergency_fields() -> None:
     items = HospitalService._normalize_items(
         "emergency",

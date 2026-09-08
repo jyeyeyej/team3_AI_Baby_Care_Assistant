@@ -401,10 +401,10 @@ def create_care_log(
     )
 
 
-def transcribe_audio(audio_file: Any, baby_id: str, session_id: str) -> dict:
+def transcribe_audio(audio_file: Any, baby_id: str, session_id: str, user_id: str) -> dict:
     """음성 파일을 STT API로 보내고, 사용자가 확인할 텍스트를 반환한다.
 
-    백엔드가 준비되면 ``POST /api/media/speech/transcribe`` 계약으로 연결한다.
+    ``POST /api/speech/transcriptions``로 파일·아기·세션을 전송한다.
     현재 시연 모드에서는 녹음 결과를 바로 저장하지 않는 흐름을 확인할 수 있도록
     예시 문장을 반환한다.
     """
@@ -426,7 +426,45 @@ def transcribe_audio(audio_file: Any, baby_id: str, session_id: str) -> dict:
 
     return request_backend(
         "POST",
-        "/api/media/speech/transcribe",
-        data={"baby_id": baby_id, "session_id": session_id},
-        files={"file": (getattr(audio_file, "name", "voice.webm"), audio_file, getattr(audio_file, "type", "audio/webm"))},
+        "/api/speech/transcriptions",
+        data={"baby_id": baby_id, "session_id": session_id, "user_id": user_id},
+        files={"audio": (getattr(audio_file, "name", "voice.webm"), audio_file, getattr(audio_file, "type", "audio/webm"))},
+    )
+
+
+def confirm_stt_record(*, tool_call_id: str, baby_id: str, session_id: str, request_id: str, user_id: str) -> dict:
+    """승인 대기 Snapshot을 검증해 기록을 한 번만 저장한다."""
+    if USE_MOCK_API:
+        return {
+            "success": True,
+            "message": "음성 수유 기록을 저장했습니다.",
+            "data": {"tool_call_id": tool_call_id},
+        }
+    return request_backend(
+        "POST",
+        "/api/speech/approvals/confirm",
+        json={
+            "tool_call_id": tool_call_id,
+            "baby_id": baby_id,
+            "session_id": session_id,
+            "request_id": request_id,
+        },
+        headers={"X-User-Id": user_id, "X-Session-Id": session_id},
+    )
+
+
+def reject_stt_record(*, tool_call_id: str, baby_id: str, session_id: str, request_id: str, user_id: str) -> dict:
+    """승인 대기 Snapshot을 폐기하며 DB 기록은 만들지 않는다."""
+    if USE_MOCK_API:
+        return {"success": True, "message": "음성 기록 저장을 취소했습니다.", "data": {"tool_call_id": tool_call_id}}
+    return request_backend(
+        "POST",
+        "/api/speech/approvals/reject",
+        json={
+            "tool_call_id": tool_call_id,
+            "baby_id": baby_id,
+            "session_id": session_id,
+            "request_id": request_id,
+        },
+        headers={"X-User-Id": user_id, "X-Session-Id": session_id},
     )
