@@ -84,6 +84,43 @@ def test_provider_specific_request_parameters_and_region_filtering() -> None:
     assert filtered == rows[:2]
 
 
+def test_unambiguous_seoul_district_is_expanded_before_provider_request() -> None:
+    assert HospitalService._normalize_region("관악구") == "서울특별시 관악구"
+    assert HospitalService._normalize_region("서울특별시 관악구") == "서울특별시 관악구"
+    assert HospitalService._normalize_region("서울 동작구") == "서울특별시 동작구"
+
+
+def test_locality_only_pediatric_search_uses_provider_locality_filter() -> None:
+    params = HospitalService._build_params("pediatric", "key", "신대방동", page=1, limit=10)
+
+    assert params["emdongNm"] == "신대방동"
+    assert "sidoCd" not in params
+    assert params["dgsbjtCd"] == "11"
+
+
+@pytest.mark.parametrize(
+    ("raw_region", "province", "district", "locality"),
+    [
+        ("서울특별시", "서울특별시", "", ""),
+        ("관악구", "서울특별시", "관악구", ""),
+        ("신대방동", "", "", "신대방동"),
+        ("동작구 신대방동", "서울특별시", "동작구", "신대방동"),
+        ("서울특별시 동작구", "서울특별시", "동작구", ""),
+        ("서울특별시 동작구 신대방동", "서울특별시", "동작구", "신대방동"),
+    ],
+)
+def test_all_supported_region_input_forms_are_parsed_consistently(
+    raw_region: str, province: str, district: str, locality: str
+) -> None:
+    normalized = HospitalService._normalize_region(raw_region)
+
+    assert HospitalService._parse_region(normalized) == (province, district, locality)
+
+    params = HospitalService._build_params("pediatric", "key", normalized, page=1, limit=10)
+    assert params.get("sidoCd") == ({"서울특별시": "110000"}.get(province))
+    assert params.get("emdongNm") == (locality or None)
+
+
 def test_normalize_pediatric_nhis_field_names() -> None:
     items = HospitalService._normalize_items(
         "pediatric", [{"yadmNm": "예시소아과", "addr": "서울특별시 동작구", "telno": "02-123"}]

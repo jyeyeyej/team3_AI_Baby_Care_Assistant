@@ -19,6 +19,14 @@ from app.services.auth_service import find_test_user
 
 router = APIRouter(prefix="/api", tags=["인증"])
 
+DEMO_BABY_NAMES = {"user-001": "서아", "user-002": "민준"}
+
+
+def is_corrupted_demo_name(value: str | None) -> bool:
+    """Detect only visibly damaged legacy demo names; never overwrite real names."""
+    normalized = (value or "").strip()
+    return not normalized or all(character in {"?", "�"} for character in normalized)
+
 
 @router.post("/test-login", response_model=TestLoginResponse)
 async def test_login(
@@ -55,6 +63,11 @@ async def test_login(
                 allergies=["땅콩"] if is_seoa else [],
             )
             session.add(baby)
+            await session.commit()
+        if baby is not None and user["user_id"] in DEMO_BABY_NAMES and is_corrupted_demo_name(baby.baby_name):
+            # Older local demo DBs can contain question marks from a legacy
+            # Windows encoding issue. Repair only the known placeholder name.
+            baby.baby_name = DEMO_BABY_NAMES[user["user_id"]]
             await session.commit()
         baby_id = baby.id if baby is not None else None
 

@@ -9,6 +9,7 @@ from app.models.baby import Baby
 from app.repositories.vaccination_repository import load_schedule
 from app.services.care.growth_service import build_growth_information
 from app.services.agent import agent_service
+from app.routers.auth_router import is_corrupted_demo_name
 from app.services.info.vaccination_service import get_vaccinations
 
 
@@ -20,6 +21,13 @@ def test_success_response_has_the_frontend_contract():
         "data": {"id": "sample"},
         "request_id": "request-1",
     }
+
+
+def test_only_damaged_demo_names_are_repaired():
+    assert is_corrupted_demo_name("????????")
+    assert is_corrupted_demo_name("����")
+    assert not is_corrupted_demo_name("서아")
+    assert not is_corrupted_demo_name("김 보호자")
 
 
 def test_local_vaccination_schedule_is_valid_and_used():
@@ -96,3 +104,21 @@ async def test_general_baby_category_is_not_rejected(monkeypatch):
         category="general_baby", intent="guidance", is_medical_urgent=False
     )))
     assert await agent_service.classify_category("아기 목욕은 언제 시키면 좋아?") == "general_baby"
+
+
+@pytest.mark.parametrize(
+    ("message", "region"),
+    [
+        ("서울 소아과 찾아줘", "서울특별시"),
+        ("신대방동 소아과 알려줘", "신대방동"),
+        ("서울 신대방동 소아과 찾아줘", "서울특별시 신대방동"),
+        ("서울 동작구 소아과 찾아줘", "서울특별시 동작구"),
+        ("동작구 신대방동 소아과 찾아줘", "동작구 신대방동"),
+    ],
+)
+def test_chat_extracts_every_supported_hospital_region_form(message, region):
+    assert agent_service._extract_hospital_region(message) == region
+
+
+def test_generic_hospital_chat_request_defaults_to_pediatric_search():
+    assert agent_service._hospital_type_for_request("광진구 병원 알려줘") == "pediatric"

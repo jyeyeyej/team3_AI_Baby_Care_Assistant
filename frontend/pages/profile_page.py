@@ -5,8 +5,10 @@ from common import render_page_header
 
 def render() -> None:
     baby_data=api.get_baby(st.session_state.baby_id, user_id=st.session_state.user_id, session_id=st.session_state.session_id)["data"]
-    st.session_state.setdefault("profile_values", baby_data.copy())
     st.session_state.setdefault("profile_editing", False)
+    # Outside edit mode, use the latest value read from the database.
+    if not st.session_state.profile_editing:
+        st.session_state.profile_values = baby_data.copy()
     st.session_state.setdefault("guardian_values", {"name": "김서아", "relation": "엄마", "phone": "010-1234-5678", "email": "seoa.guardian@example.com"})
     st.session_state.setdefault("guardian_editing", False)
     b=st.session_state.profile_values
@@ -50,6 +52,24 @@ def render() -> None:
         <style>.guardian-card{{background:#fff;border:1px solid #E3E7F1;border-radius:14px;padding:16px}}.guardian-card h3{{margin:0 0 5px;font-size:18px}}.guardian-help{{font-size:13px;color:#778198;margin-bottom:14px}}.guardian-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}}.guardian-item{{background:#F4F6FB;border:1px solid #DFE4F1;border-radius:8px;padding:10px;font-size:13px;color:#778198}}.guardian-item b{{display:block;color:#202737;margin-top:5px}}@media(max-width:700px){{.guardian-grid{{grid-template-columns:1fr}}}}</style><div class='guardian-card'><h3>보호자 정보</h3><div class='guardian-help'>아기 생활 기록과 맞춤형 안내를 관리하는 보호자 정보입니다.</div><div class='guardian-grid'><div class='guardian-item'>보호자 이름<b>{guardian['name']}</b></div><div class='guardian-item'>아기와의 관계<b>{guardian['relation']}</b></div><div class='guardian-item'>연락처<b>{guardian['phone']}</b></div><div class='guardian-item'>이메일<b>{guardian['email']}</b></div></div></div>
         """, unsafe_allow_html=True); return
     if selected=="알림 설정":
+        # Load from PostgreSQL once for each login session. Later button clicks
+        # edit only the local draft until the user explicitly saves it.
+        if st.session_state.get("reminder_loaded_session") != st.session_state.session_id:
+            result = api.get_feeding_reminder(
+                st.session_state.baby_id,
+                user_id=st.session_state.user_id,
+                session_id=st.session_state.session_id,
+            )
+            if result["success"]:
+                st.session_state.feeding_interval_minutes = result["data"]["feeding_interval_minutes"]
+                st.session_state.feeding_interval_choice = {
+                    150: "2시간 30분",
+                    180: "3시간",
+                    210: "3시간 30분",
+                }.get(st.session_state.feeding_interval_minutes, "직접 입력")
+            else:
+                st.error(result.get("message", "알림 설정을 불러오지 못했습니다."))
+            st.session_state.reminder_loaded_session = st.session_state.session_id
         st.session_state.setdefault("feeding_interval_minutes", 180)
         st.session_state.setdefault("feeding_interval_choice", "3시간")
         minutes_by_choice = {"2시간 30분": 150, "3시간": 180, "3시간 30분": 210}
@@ -67,8 +87,17 @@ def render() -> None:
         if st.session_state.feeding_interval_choice == "직접 입력":
             interval = st.number_input("알림 간격 (분)", min_value=30, max_value=720, value=interval, step=30, help="30분부터 12시간(720분)까지 입력할 수 있어요.")
         if st.button("알림 설정 저장", key="save_reminder_setting", type="primary"):
-            st.session_state.feeding_interval_minutes = interval
-            st.toast("수유 알림 간격을 저장했습니다.")
+            result = api.update_feeding_reminder(
+                st.session_state.baby_id,
+                int(interval),
+                user_id=st.session_state.user_id,
+                session_id=st.session_state.session_id,
+            )
+            if result["success"]:
+                st.session_state.feeding_interval_minutes = result["data"]["feeding_interval_minutes"]
+                st.toast("수유 알림 간격을 DB에 저장했습니다.")
+            else:
+                st.error(result.get("message", "수유 알림 간격을 저장하지 못했습니다."))
         return
     if st.button("✎ 수정하기", key="edit_baby_profile", type="primary"):
         st.session_state.profile_editing = True
@@ -88,10 +117,33 @@ def render() -> None:
             save, cancel = st.columns(2)
             if save.form_submit_button("저장하기", type="primary", use_container_width=True):
                 allergies = [item.strip() for item in allergies_text.split(",") if item.strip()]
-                st.session_state.profile_values.update({"baby_name": name, "birth_date": birth_date, "gender": gender, "feeding_type": feeding, "current_weight_kg": weight, "current_height_cm": height, "allergies": allergies})
-                st.session_state.profile_editing = False
-                st.toast("아기 정보가 저장되었습니다.")
-                st.rerun()
+                result = api.update_baby(
+                    st.session_state.baby_id,
+                    {
+                        "baby_name": name.strip(),
+                        "birth_date": birth_date.strip(),
+                        "gender": gender,
+                        "feeding_type": feeding,
+                        "current_weight_kg": weight,
+                        "current_height_cm": height,
+                        "allergies": allergies,
+                    },
+                    user_id=st.session_state.user_id,
+                    session_id=st.session_state.session_id,
+                )
+                if result["success"]:
+                    refreshed = api.get_baby(
+                        st.session_state.baby_id,
+                        user_id=st.session_state.user_id,
+                        session_id=st.session_state.session_id,
+                    )
+                    if refreshed["success"]:
+                        st.session_state.profile_values = refreshed["data"]
+                    st.session_state.profile_editing = False
+                    st.toast("아기 정보를 DB에 저장했습니다.")
+                    st.rerun()
+                else:
+                    st.error(result.get("message", "아기 정보를 저장하지 못했습니다."))
             if cancel.form_submit_button("취소", use_container_width=True):
                 st.session_state.profile_editing = False
                 st.rerun()

@@ -117,6 +117,10 @@ def get_baby(baby_id: str, *, user_id: str | None = None, session_id: str | None
         )
         if result["success"]:
             data = result["data"]
+            # The database permits optional growth fields.  Do not let a
+            # backend null replace the existing demo fallback used by the
+            # dashboard and growth chart.
+            populated_data = {key: value for key, value in data.items() if value is not None}
             birth_date = data.get("birth_date", BABY["birth_date"])
             try:
                 age_days = (date.today() - date.fromisoformat(birth_date)).days
@@ -127,7 +131,7 @@ def get_baby(baby_id: str, *, user_id: str | None = None, session_id: str | None
                 "success": True,
                 "data": {
                     **BABY,
-                    **data,
+                    **populated_data,
                     "baby_id": data.get("id", baby_id),
                     "age_days": age_days,
                     "feeding_type": feeding_labels.get(data.get("feeding_type"), data.get("feeding_type")),
@@ -137,6 +141,93 @@ def get_baby(baby_id: str, *, user_id: str | None = None, session_id: str | None
     fallback = BABY.copy()
     fallback["baby_id"] = baby_id
     return {"success": True, "data": fallback}
+
+
+def update_baby(
+    baby_id: str,
+    payload: dict[str, Any],
+    *,
+    user_id: str,
+    session_id: str,
+) -> dict:
+    """Save the editable baby profile through the authenticated backend API."""
+    if USE_MOCK_API:
+        updated = {**BABY, **payload, "baby_id": baby_id}
+        return {"success": True, "message": "목데이터에 아기 정보를 저장했습니다.", "data": updated}
+
+    gender_codes = {"여아": "female", "남아": "male"}
+    feeding_codes = {"모유": "breast", "분유": "formula", "혼합": "mixed"}
+    request_payload = {
+        **payload,
+        "gender": gender_codes.get(payload.get("gender"), payload.get("gender")),
+        "feeding_type": feeding_codes.get(
+            payload.get("feeding_type"), payload.get("feeding_type")
+        ),
+    }
+    return request_backend(
+        "PATCH",
+        f"/api/babies/{baby_id}",
+        json=request_payload,
+        headers={"X-User-Id": user_id, "X-Session-Id": session_id},
+    )
+
+
+def get_feeding_reminder(
+    baby_id: str,
+    *,
+    user_id: str,
+    session_id: str,
+) -> dict:
+    """Read the saved feeding-reminder interval for the logged-in baby."""
+    if USE_MOCK_API:
+        return {
+            "success": True,
+            "message": "목 알림 설정입니다.",
+            "data": {"id": "mock-reminder", "baby_id": baby_id, "feeding_interval_minutes": 180},
+        }
+    return request_backend(
+        "GET",
+        f"/api/reminders/feeding/{baby_id}",
+        headers={"X-User-Id": user_id, "X-Session-Id": session_id},
+    )
+
+
+def update_feeding_reminder(
+    baby_id: str,
+    interval_minutes: int,
+    *,
+    user_id: str,
+    session_id: str,
+) -> dict:
+    """Persist the feeding-reminder interval in the backend database."""
+    if USE_MOCK_API:
+        return {
+            "success": True,
+            "message": "목 알림 설정을 저장했습니다.",
+            "data": {"id": "mock-reminder", "baby_id": baby_id, "feeding_interval_minutes": interval_minutes},
+        }
+    return request_backend(
+        "PATCH",
+        f"/api/reminders/feeding/{baby_id}/settings",
+        json={"feeding_interval_minutes": interval_minutes},
+        headers={"X-User-Id": user_id, "X-Session-Id": session_id},
+    )
+
+
+def change_feeding_reminder_action(*, baby_id: str, action: str, user_id: str, session_id: str) -> dict:
+    """Persist confirm/snooze/skip instead of changing only Streamlit state."""
+    reminder = get_feeding_reminder(baby_id, user_id=user_id, session_id=session_id)
+    reminder_id = (reminder.get("data") or {}).get("id")
+    if not reminder.get("success") or not reminder_id:
+        return {"success": False, "message": reminder.get("message", "수유 알림을 찾지 못했습니다."), "data": {}}
+    if USE_MOCK_API:
+        return {"success": True, "message": "알림 상태를 변경했습니다.", "data": {"action": action}}
+    return request_backend(
+        "PATCH",
+        f"/api/reminders/{reminder_id}",
+        json={"action": action},
+        headers={"X-User-Id": user_id, "X-Session-Id": session_id},
+    )
 
 
 def get_dashboard(_: str) -> dict:
@@ -287,6 +378,61 @@ def stream_chat(message: str, *, baby_id: str | None, session_id: str | None, us
         yield {"event": "error", "data": {"message": "서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요."}}
 
 
+def stream_hospital_search(
+    region: str,
+    *,
+    hospital_type: str,
+    user_id: str,
+    session_id: str,
+):
+    """Yield hospital-search progress events from the SSE endpoint."""
+    if USE_MOCK_API:
+        yield {"event": "completed", "data": search_hospitals(
+            region,
+            hospital_type=hospital_type,
+            user_id=user_id,
+            session_id=session_id,
+        )}
+        return
+
+    try:
+        response = requests.get(
+            f"{BACKEND_API_URL}/api/hospitals/search/stream",
+            params={"region": region, "type": hospital_type, "page": 1, "limit": 3},
+            headers={"X-User-Id": user_id, "X-Session-Id": session_id},
+            stream=True,
+            # 소아과 공공데이터는 제공자 리다이렉트·전문과 조회로 최대 20초가 걸릴 수 있다.
+            # 일반 채팅의 짧은 제한을 그대로 쓰면 결과가 도착하기 전에 연결 오류가 된다.
+            timeout=max(API_TIMEOUT_SECONDS, 35),
+        )
+        if not response.ok:
+            try:
+                body = response.json()
+                message_text = body.get("detail") or "병원 검색을 처리하지 못했습니다."
+            except ValueError:
+                message_text = "병원 검색을 처리하지 못했습니다."
+            yield {"event": "error", "data": {"message": message_text}}
+            return
+
+        event_name = "message"
+        event_data: dict[str, Any] = {}
+        for raw_line in response.iter_lines(chunk_size=1, decode_unicode=True):
+            line = raw_line.strip() if raw_line else ""
+            if line.startswith("event:"):
+                event_name = line.removeprefix("event:").strip()
+            elif line.startswith("data:"):
+                try:
+                    event_data = json.loads(line.removeprefix("data:").strip())
+                except json.JSONDecodeError:
+                    event_data = {"message": "스트리밍 응답 형식이 올바르지 않습니다."}
+            elif not line:
+                if event_data:
+                    yield {"event": event_name, "data": event_data}
+                event_name, event_data = "message", {}
+    except requests.RequestException:
+        yield {"event": "error", "data": {"message": "병원 검색 서버에 연결할 수 없습니다."}}
+
+
 def search_hospitals(
     region: str,
     *,
@@ -306,7 +452,19 @@ def search_hospitals(
                         "address": f"{region} 예시로 12",
                         "phone": "02-1234-5678",
                         "operating_hours": "평일 09:00~18:00",
-                    }
+                    },
+                    {
+                        "hospital_name": "햇살소아청소년과의원",
+                        "address": f"{region} 예시로 28",
+                        "phone": "02-2345-6789",
+                        "operating_hours": "평일 09:00~18:30",
+                    },
+                    {
+                        "hospital_name": "튼튼소아청소년과의원",
+                        "address": f"{region} 예시로 45",
+                        "phone": "02-3456-7890",
+                        "operating_hours": "평일 09:00~19:00",
+                    },
                 ],
                 "notice": "운영시간과 진료 가능 여부는 방문 전 의료기관에 확인해 주세요.",
             },

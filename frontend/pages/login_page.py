@@ -12,7 +12,7 @@ def render() -> None:
         st.markdown("### 🫧 &nbsp; AI Baby Care")
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown("## 반가워요 👋")
-        st.caption("테스트 보호자를 선택하고 AI 육아 도우미를 시작해 보세요.")
+        st.caption("AI 육아 도우미를 시작해 보세요.")
         selected = st.selectbox("테스트 사용자", ["서아 보호자 · 생후 31일", "민준 보호자 · 생후 6개월"])
         if st.button("로그인", use_container_width=True, type="primary"):
             result = api.test_login(selected)
@@ -25,7 +25,6 @@ def render() -> None:
             else:
                 st.error(result.get("message", "로그인 세션을 만들지 못했습니다."))
         st.markdown("<br><br><br>", unsafe_allow_html=True)
-        st.caption("ⓘ 이 프로젝트는 실제 인증 없이 준비된 가짜 사용자 데이터로 시연됩니다.")
 
     with right:
         st.markdown("<br><br>", unsafe_allow_html=True)

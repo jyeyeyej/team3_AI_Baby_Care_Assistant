@@ -1,10 +1,10 @@
 """Hospital search routes."""
 
-from uuid import uuid4
-
+import json
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.info import HospitalSearchResponse
@@ -15,6 +15,11 @@ from app.services.info.vaccination_service import get_vaccinations
 
 
 router = APIRouter(prefix="/api", tags=["병원 검색"])
+
+
+def _sse_event(name: str, data: dict) -> str:
+    """Encode one user-safe hospital-search SSE event."""
+    return f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 async def get_db_session(request: Request):
@@ -48,6 +53,41 @@ async def search_hospitals_api(
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail="병원 검색 서비스에 연결할 수 없습니다.") from exc
     return {"success": True, "message": "병원 검색 결과를 조회했습니다.", "data": HospitalSearchResponse.model_validate(data), "request_id": str(uuid4())}
+
+
+@router.get("/hospitals/search/stream")
+async def search_hospitals_stream_api(
+    region: str = Query(min_length=2, max_length=100),
+    type: str = Query(pattern="^(pediatric|emergency)$"),
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=10, ge=1, le=30),
+    _user_id: str = Depends(get_authenticated_user),
+) -> StreamingResponse:
+    """Stream hospital-search progress and the final result over SSE."""
+    async def event_stream():
+        yield _sse_event("received", {"status": "received"})
+        yield _sse_event("validating_region", {"status": "validating_region"})
+        yield _sse_event("searching_hospitals", {"status": "searching_hospitals"})
+        try:
+            data = await search_hospitals(type, region.strip(), page, limit)
+            result = {
+                "success": True,
+                "message": "병원 검색 결과를 조회했습니다.",
+                "data": HospitalSearchResponse.model_validate(data).model_dump(mode="json"),
+                "request_id": str(uuid4()),
+            }
+        except ValueError as error:
+            result = {"success": False, "message": str(error)}
+        except RuntimeError:
+            result = {"success": False, "message": "병원 검색 서비스에 연결할 수 없습니다."}
+        yield _sse_event("formatting_result", {"status": "formatting_result"})
+        yield _sse_event("completed", {"status": "completed", "result": result})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/vaccinations/{baby_id}")

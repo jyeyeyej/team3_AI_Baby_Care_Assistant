@@ -14,8 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import OPENAI_API_KEY, OPENAI_MODEL
 from app.mcp_clients.baby_info_client import search_knowledge_from_mcp
 from app.mcp_clients.baby_care_client import get_care_records, record_care_event
+from app.services.info.hospital_service import search_hospitals
 from app.models.baby import Baby
-from .memory_service import get_relevant_memories, save_memory_candidate
+from .memory_service import get_recent_conversation, get_relevant_memories, save_memory_candidate
 from .memory_trace_service import write_chat_trace
 
 OUT_OF_SCOPE = (
@@ -50,6 +51,72 @@ def _text_response(answer: str, *, response_type: str = "text") -> dict:
     return {"response_type": response_type, "answer": answer, "sources": []}
 
 
+CITY_ALIASES = {
+    "서울": "서울특별시", "서울시": "서울특별시", "서울특별시": "서울특별시",
+    "부산": "부산광역시", "부산시": "부산광역시", "부산광역시": "부산광역시",
+    "대구": "대구광역시", "대구시": "대구광역시", "대구광역시": "대구광역시",
+    "인천": "인천광역시", "인천시": "인천광역시", "인천광역시": "인천광역시",
+    "광주": "광주광역시", "광주시": "광주광역시", "광주광역시": "광주광역시",
+    "대전": "대전광역시", "대전시": "대전광역시", "대전광역시": "대전광역시",
+    "울산": "울산광역시", "울산시": "울산광역시", "울산광역시": "울산광역시",
+    "세종": "세종특별자치시", "세종시": "세종특별자치시", "세종특별자치시": "세종특별자치시",
+    "제주": "제주특별자치도", "제주시": "제주특별자치도", "제주특별자치도": "제주특별자치도",
+}
+
+
+def _extract_hospital_region(message: str) -> str | None:
+    """Extract supported 시·구·동 combinations without relying on an LLM."""
+    compact = re.sub(r"\s+", " ", message.strip())
+    city = next((canonical for alias, canonical in CITY_ALIASES.items() if alias in compact), None)
+    district_match = re.search(r"(?<![가-힣])([가-힣]+(?:구|군))(?![가-힣])", compact)
+    locality_match = re.search(r"(?<![가-힣])([가-힣0-9]+(?:동|읍|면))(?![가-힣])", compact)
+    district = district_match.group(1) if district_match else ""
+    locality = locality_match.group(1) if locality_match else ""
+    parts = [part for part in (city, district, locality) if part]
+    return " ".join(parts) or None
+
+
+def _hospital_type_for_request(message: str) -> str | None:
+    if any(word in message for word in ("응급실", "응급 의료", "응급의료")):
+        return "emergency"
+    # In this baby-care service, an unqualified "병원" request means a
+    # nearby pediatric clinic unless the user explicitly asks for emergency care.
+    if any(word in message for word in ("소아과", "소아청소년과", "소아 병원", "병원")):
+        return "pediatric"
+    return None
+
+
+def _format_hospital_answer(region: str, data: dict, hospital_type: str) -> str:
+    items = data.get("data", [])
+    if not items:
+        label = "응급실" if hospital_type == "emergency" else "소아과"
+        return f"{region}에서 검색된 {label}가 없어요. 지역명을 다시 확인해 주세요."
+    rows = []
+    for index, hospital in enumerate(items[:3], start=1):
+        name = hospital.get("hospital_name", "의료기관")
+        address = hospital.get("address", "주소 확인 필요")
+        phone = hospital.get("phone") or "전화번호 확인 필요"
+        rows.append(f"{index}. {name}\n{address}\n{phone}")
+    default_notice = "위급한 경우 119에 연락하세요." if hospital_type == "emergency" else "운영시간과 진료 가능 여부는 방문 전 의료기관에 확인해 주세요."
+    notice = data.get("notice", default_notice)
+    label = "응급실" if hospital_type == "emergency" else "소아과"
+    return f"{region} 주변 {label} 검색 결과입니다.\n\n" + "\n\n".join(rows) + f"\n\n{notice}"
+
+
+async def _handle_hospital_request(message: str) -> dict | None:
+    hospital_type = _hospital_type_for_request(message)
+    if hospital_type is None:
+        return None
+    region = _extract_hospital_region(message)
+    if region is None:
+        return _text_response(
+            "검색할 지역을 함께 알려주세요. 예: ‘서울 소아과’, ‘신대방동 응급실’, ‘서울 동작구 소아과 찾아줘’",
+            response_type="clarification_required",
+        )
+    result = await search_hospitals(hospital_type, region, page=1, limit=3)
+    return _text_response(_format_hospital_answer(region, result, hospital_type), response_type="hospital_list")
+
+
 GENERAL_BABY_GUIDANCE_PROMPT = """당신은 한국어 육아 도우미입니다. 보호자의 질문에
 짧고 실용적인 일반 육아 안내를 제공하세요. 질병을 진단하거나 약 용량·처방을 제시하지
 마세요. 월령, 증상 시작 시점, 동반 증상처럼 답변에 필요한 정보가 부족하면 1~2개의
@@ -57,7 +124,14 @@ GENERAL_BABY_GUIDANCE_PROMPT = """당신은 한국어 육아 도우미입니다.
 위험 신호가 의심되면 일반 안내보다 즉시 의료기관 또는 119 도움을 우선하라고 안내하세요."""
 
 
-async def generate_general_baby_guidance(message: str) -> str:
+def _memory_instruction(memories: list) -> str:
+    preferences = [memory.content for memory in memories if getattr(memory, "memory_type", "") == "preference"]
+    if not preferences:
+        return ""
+    return "\n보호자의 저장된 답변 선호를 따르세요: " + " / ".join(preferences[:3])
+
+
+async def generate_general_baby_guidance(message: str, memories: list | None = None, recent_messages: list[dict] | None = None) -> str:
     """Provide safe coverage for in-scope questions without a matching RAG source."""
     fallback = (
         "아기와 관련된 질문으로 이해했어요. 아기의 월령, 언제부터 있었는지, 함께 보이는 "
@@ -71,7 +145,8 @@ async def generate_general_baby_guidance(message: str) -> str:
             model=OPENAI_MODEL,
             temperature=0.2,
             messages=[
-                {"role": "system", "content": GENERAL_BABY_GUIDANCE_PROMPT},
+                {"role": "system", "content": GENERAL_BABY_GUIDANCE_PROMPT + _memory_instruction(memories or [])},
+                *(recent_messages or [])[-4:],
                 {"role": "user", "content": message},
             ],
         )
@@ -191,10 +266,15 @@ async def answer_chat(request, app) -> dict:
     request_id = str(uuid4())
     baby = await _validate_context(request, app)
     memories = await get_relevant_memories(app.state.db_engine, request.user_id, request.message)
+    recent_messages = await get_recent_conversation(app.state.redis, request.user_id, request.session_id)
     care_response = await _handle_care_request(request)
     if care_response is not None:
         await write_chat_trace(app.state.redis, user_id=request.user_id, session_id=request.session_id, baby_id=request.baby_id, request_id=request_id, tool_used=True, memory_count=len(memories), memory_created=False)
         return {"success": True, "message": "요청을 처리했습니다.", "request_id": request_id, "data": care_response}
+    hospital_response = await _handle_hospital_request(request.message)
+    if hospital_response is not None:
+        await write_chat_trace(app.state.redis, user_id=request.user_id, session_id=request.session_id, baby_id=request.baby_id, request_id=request_id, tool_used=True, memory_count=len(memories), memory_created=False)
+        return {"success": True, "message": "병원 검색 결과를 조회했습니다.", "request_id": request_id, "data": hospital_response}
     category = await classify_category(request.message)
     if category is None:
         created = await save_memory_candidate(app.state.db_engine, request.user_id, request.message)
@@ -204,7 +284,7 @@ async def answer_chat(request, app) -> dict:
     if category == "general_baby":
         chat = {
             "response_type": "text",
-            "answer": await generate_general_baby_guidance(request.message),
+            "answer": await generate_general_baby_guidance(request.message, memories, recent_messages),
             "sources": [],
             "confidence": "low",
             "safety_notice": "일반 육아 안내이며 진단을 대신하지 않습니다.",
@@ -217,7 +297,7 @@ async def answer_chat(request, app) -> dict:
         no_evidence = result.get("confidence") == "low" and not result.get("sources")
         chat = {
             "response_type": "text",
-            "answer": await generate_general_baby_guidance(request.message) if no_evidence else result["answer"],
+            "answer": await generate_general_baby_guidance(request.message, memories, recent_messages) if no_evidence else result["answer"],
             "sources": result.get("sources", []),
             "confidence": result.get("confidence"),
             "safety_notice": result.get("safety_notice") or ("일반 육아 안내이며 진단을 대신하지 않습니다." if no_evidence else None),

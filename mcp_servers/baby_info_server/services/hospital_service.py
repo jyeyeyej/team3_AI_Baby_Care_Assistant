@@ -19,9 +19,26 @@ SIDO_CODES = {
     "전북특별자치도": "350000", "전라남도": "360000", "경상북도": "370000",
     "경상남도": "380000", "제주특별자치도": "390000",
 }
+CITY_ALIASES = {
+    "서울": "서울특별시", "서울시": "서울특별시",
+    "부산": "부산광역시", "부산시": "부산광역시",
+    "대구": "대구광역시", "대구시": "대구광역시",
+    "인천": "인천광역시", "인천시": "인천광역시",
+    "광주": "광주광역시", "광주시": "광주광역시",
+    "대전": "대전광역시", "대전시": "대전광역시",
+    "울산": "울산광역시", "울산시": "울산광역시",
+    "세종": "세종특별자치시", "세종시": "세종특별자치시",
+    "제주": "제주특별자치도", "제주시": "제주특별자치도",
+}
 PEDIATRIC_DEPARTMENT_CODE = "11"
 PEDIATRIC_BATCH_SIZE = 100
 PEDIATRIC_TIMEOUT_SECONDS = 20.0
+SEOUL_ONLY_DISTRICTS = frozenset({
+    # 강서구·중구처럼 여러 시·도에 있는 이름은 사용자의 시·도 입력이 필요하다.
+    "강남구", "강동구", "강북구", "관악구", "광진구", "구로구", "금천구",
+    "노원구", "도봉구", "동대문구", "동작구", "마포구", "서대문구", "서초구", "성동구",
+    "성북구", "송파구", "양천구", "영등포구", "용산구", "은평구", "종로구", "중랑구",
+})
 
 
 class ExternalApiError(RuntimeError):
@@ -59,6 +76,7 @@ class HospitalService:
         if not base_url or not api_key:
             raise ExternalApiError("공공데이터 API 설정이 필요합니다.")
 
+        region = self._normalize_region(region)
         provider_limit = max(limit, PEDIATRIC_BATCH_SIZE) if kind == "pediatric" else limit
         params = self._build_params(kind, api_key, region, page, provider_limit)
         payload = await self._request(
@@ -89,7 +107,7 @@ class HospitalService:
         kind: HospitalKind, api_key: str, region: str, page: int, limit: int
     ) -> dict[str, Any]:
         """Build the documented, provider-specific request shape."""
-        province, district = HospitalService._split_region(region)
+        province, district, locality = HospitalService._parse_region(region)
         # 공공데이터포털 키는 .env에 URL 인코딩된 형태로 저장되는 경우가 많다.
         # httpx가 query parameter를 인코딩하므로 먼저 한 번만 원문으로 되돌린다.
         common = {
@@ -105,21 +123,49 @@ class HospitalService:
             **common,
             "dgsbjtCd": PEDIATRIC_DEPARTMENT_CODE,
             **({"sidoCd": code} if code else {}),
+            **({"emdongNm": locality} if locality else {}),
         }
 
     @staticmethod
-    def _split_region(region: str) -> tuple[str, str]:
-        parts = region.split(maxsplit=1)
-        return parts[0], parts[1] if len(parts) > 1 else ""
+    def _normalize_region(region: str) -> str:
+        """Normalize city aliases and expand an unambiguous Seoul district prefix."""
+        parts = region.split()
+        if not parts:
+            return ""
+        parts[0] = CITY_ALIASES.get(parts[0], parts[0])
+        if parts[0] in SEOUL_ONLY_DISTRICTS:
+            parts.insert(0, "서울특별시")
+        normalized = " ".join(parts)
+        return normalized
+
+    @staticmethod
+    def _parse_region(region: str) -> tuple[str, str, str]:
+        """Parse normalized 시·도 / 구·군 / 읍·면·동 components independently."""
+        parts = region.split()
+        if not parts:
+            return "", "", ""
+        province = parts.pop(0) if parts[0] in SIDO_CODES else ""
+        if not province:
+            # A lone 동·읍·면 is searched through the provider locality filter.
+            locality = parts[0] if len(parts) == 1 and parts[0].endswith(("동", "읍", "면")) else ""
+            if locality:
+                return "", "", locality
+            return "", " ".join(parts), ""
+        locality = ""
+        if parts and parts[-1].endswith(("동", "읍", "면")):
+            locality = parts.pop()
+        return province, " ".join(parts), locality
 
     @staticmethod
     def _filter_region(kind: HospitalKind, rows: list[dict[str, Any]], region: str) -> list[dict[str, Any]]:
         """Keep the requested locality after the provider's specialty filter."""
-        province, district = HospitalService._split_region(region)
+        province, district, locality = HospitalService._parse_region(region)
         filtered: list[dict[str, Any]] = []
         for row in rows:
             address = HospitalService._text(row, "address", "dutyAddr", "addr") or ""
-            if province not in address or (district and district not in address):
+            if ((province and province not in address)
+                    or (district and district not in address)
+                    or (locality and locality not in address)):
                 continue
             filtered.append(row)
         return filtered

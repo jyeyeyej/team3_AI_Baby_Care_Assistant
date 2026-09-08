@@ -23,6 +23,9 @@ def render() -> None:
             st.session_state.care_selected = label
             st.rerun()
     selected = st.session_state.care_selected
+    current_weight = float(baby["current_weight_kg"])
+    growth_y = max(24, min(165, 132 - (20 * current_weight)))
+    growth_label_y = max(20, growth_y - 10)
     st.markdown("<style>h3{font-size:18px!important}</style>", unsafe_allow_html=True)
     query_edit = st.query_params.get("edit_record")
     if query_edit is not None and query_edit.isdigit() and int(query_edit) < len(records):
@@ -52,21 +55,21 @@ def render() -> None:
         </div>
         """,unsafe_allow_html=True); return
     if selected=="성장":
-        st.markdown("""
+        st.markdown(f"""
         <div style='background:#fff;border:1px solid #E3E7F1;border-radius:15px;padding:16px'>
           <div style='display:flex;justify-content:space-between;align-items:center'><h3 style='margin:0'>몸무게 변화</h3><span style='color:#6374DC;background:#EEF1FF;border-radius:8px;padding:7px 10px;font-size:13px'>몸무게</span></div>
           <svg viewBox='0 0 620 270' role='img' aria-label='서아의 몸무게 성장 그래프' style='width:100%;height:auto;margin-top:12px'>
             <rect x='55' y='34' width='535' height='156' rx='8' fill='#FFFFFF'/>
             <path d='M55 54H590 M55 102H590 M55 150H590 M55 190H590' stroke='#E3E7F1' stroke-dasharray='4 4'/>
             <path d='M65 128 L195 106 L325 80 L455 55 L585 34 L585 68 L455 86 L325 111 L195 137 L65 158Z' fill='#DDE3FF' opacity='.9'/>
-            <path d='M65 144 L195 122 L325 97 L455 72 L585 48' fill='none' stroke='#6374DC' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/>
-            <g fill='#6374DC'><circle cx='65' cy='144' r='5'/><circle cx='195' cy='122' r='5'/><circle cx='325' cy='97' r='5'/><circle cx='455' cy='72' r='5'/><circle cx='585' cy='48' r='5'/></g>
+            <path d='M65 144 L195 122 L325 97 L455 72 L585 {growth_y}' fill='none' stroke='#6374DC' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/>
+            <g fill='#6374DC'><circle cx='65' cy='144' r='5'/><circle cx='195' cy='122' r='5'/><circle cx='325' cy='97' r='5'/><circle cx='455' cy='72' r='5'/><circle cx='585' cy='{growth_y}' r='5'/></g>
             <g fill='#778198' font-size='12'><text x='15' y='58'>5kg</text><text x='15' y='106'>4kg</text><text x='15' y='154'>3kg</text><text x='55' y='220'>출생</text><text x='171' y='220'>1주</text><text x='301' y='220'>2주</text><text x='431' y='220'>3주</text><text x='560' y='220'>현재</text></g>
-            <text x='545' y='38' fill='#6374DC' font-size='12' font-weight='700'>4.2kg</text>
+            <text x='545' y='{growth_label_y}' fill='#6374DC' font-size='12' font-weight='700'>{current_weight:.1f}kg</text>
           </svg>
           <div style='display:flex;gap:14px;color:#778198;font-size:12px'><span><b style='color:#6374DC'>●</b> 서아</span><span><b style='color:#DDE3FF'>●</b> 같은 성별·월령 참고 범위</span></div>
           <h3 style='margin:22px 0 10px'>최근 측정 결과</h3>
-          <div style='background:#EEF1FF;padding:12px;border-radius:9px'><b>현재 몸무게 4.2kg</b><br><span style='color:#68758E;font-size:13px'>성장 추세는 참고 정보이며 정상·비정상을 단정하지 않습니다.</span></div>
+          <div style='background:#EEF1FF;padding:12px;border-radius:9px'><b>현재 몸무게 {current_weight:.1f}kg</b><br><span style='color:#68758E;font-size:13px'>성장 추세는 참고 정보이며 정상·비정상을 단정하지 않습니다.</span></div>
         </div>
         """,unsafe_allow_html=True); return
     if selected=="예방접종":
@@ -96,33 +99,12 @@ def render() -> None:
         return
     pattern = api.get_care_pattern(st.session_state.baby_id)["data"]
     vaccination = api.get_vaccinations(st.session_state.baby_id)["data"]
-    with st.expander("💩 기저귀 사진 분석", expanded=False):
-        uploaded_image = st.file_uploader("기저귀 사진", type=["jpg", "jpeg", "png"], key="diaper_image")
-        has_fever = st.checkbox("열이 있어요", key="diaper_fever")
-        stool_count = st.number_input("최근 24시간 대변 횟수", min_value=0, max_value=30, value=0, key="diaper_count")
-        if st.button("사진 분석하기", key="analyze_diaper", type="primary"):
-            if uploaded_image is None:
-                st.warning("분석할 사진을 선택해 주세요.")
-            else:
-                feeding = {"모유": "breast", "분유": "formula", "혼합": "mixed"}.get(baby["feeding_type"], "mixed")
-                response = api.analyze_diaper_image(uploaded_image, st.session_state.baby_id, st.session_state.session_id, st.session_state.user_id, feeding, has_fever, int(stool_count))
-                if response["success"]:
-                    result = response["data"]
-                    if not result["is_analyzable"]:
-                        st.info("다시 촬영해 주세요: " + " ".join(result["quality_issues"]))
-                    else:
-                        risk = result["risk"] or {}
-                        st.success("사진에서 보이는 특징을 정리했습니다.")
-                        st.json({"observation": result["observation"], "risk": risk, "follow_up_questions": result["follow_up_questions"]})
-                    st.caption(result["safety_notice"])
-                else:
-                    st.error(response["message"])
     st.markdown(
         f"""
         <style>
-        .care-ai-analysis{{background:#EEF1FF;border:1px solid #C9D2FF;border-radius:15px;padding:16px;margin:16px 0}}.care-ai-analysis-title{{font-size:17px;font-weight:800;color:#202737}}.care-ai-analysis-sub{{font-size:13px;color:#68758E;margin:4px 0 12px}}.care-ai-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}}.care-ai-item{{background:#FFFFFF;border:1px solid #E3E7F1;border-radius:10px;padding:11px;font-size:13px;color:#68758E}}.care-ai-item b{{display:block;color:#202737;margin-bottom:4px}}@media(max-width:700px){{.care-ai-grid{{grid-template-columns:1fr}}}}
+        .care-ai-analysis{{background:#EEF1FF;border:1px solid #C9D2FF;border-radius:15px;padding:16px;margin:16px 0 0}}.care-ai-analysis-title{{font-size:17px;font-weight:800;color:#202737}}.care-ai-analysis-sub{{font-size:13px;color:#68758E;margin:4px 0 12px}}.care-ai-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}}.care-ai-item{{background:#FFFFFF;border:1px solid #E3E7F1;border-radius:10px;padding:11px;font-size:13px;color:#68758E}}.care-ai-item b{{display:block;color:#202737;margin-bottom:4px}}@media(max-width:700px){{.care-ai-grid{{grid-template-columns:1fr}}}}
         </style>
-        <div class="care-ai-analysis"><div class="care-ai-analysis-title">✨ AI 육아 분석 요약</div><div class="care-ai-analysis-sub">최근 육아 기록과 월령 정보를 함께 분석한 참고 안내예요.</div><div class="care-ai-grid"><div class="care-ai-item"><b>🍼 육아 기록</b>최근 7일 수유 47회로, 기록이 꾸준히 쌓이고 있어요.</div><div class="care-ai-item"><b>🌙 생활 패턴</b>평균 수유 간격은 {pattern['average_interval']}이며, 현재 알림 간격과 비슷해요.</div><div class="care-ai-item"><b>📈 성장</b>현재 몸무게 4.2kg으로 성장 추세를 계속 관찰해 주세요.</div><div class="care-ai-item"><b>💉 예방접종</b>다음 접종은 {vaccination['next']['name']}이며 {vaccination['next']['date']}에 예정되어 있어요.</div></div></div>
+        <div class="care-ai-analysis"><div class="care-ai-analysis-title">✨ AI 육아 분석 요약</div><div class="care-ai-analysis-sub">최근 육아 기록과 월령 정보를 함께 분석한 참고 안내예요.</div><div class="care-ai-grid"><div class="care-ai-item"><b>🍼 육아 기록</b>최근 7일 수유 47회로, 기록이 꾸준히 쌓이고 있어요.</div><div class="care-ai-item"><b>🌙 생활 패턴</b>평균 수유 간격은 {pattern['average_interval']}이며, 현재 알림 간격과 비슷해요.</div><div class="care-ai-item"><b>📈 성장</b>현재 몸무게 {current_weight:.1f}kg으로 성장 추세를 계속 관찰해 주세요.</div><div class="care-ai-item"><b>💉 예방접종</b>다음 접종은 {vaccination['next']['name']}이며 {vaccination['next']['date']}에 예정되어 있어요.</div></div></div>
         """,
         unsafe_allow_html=True,
     )
