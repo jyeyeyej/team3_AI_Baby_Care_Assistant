@@ -24,6 +24,10 @@ class Settings(BaseSettings):
 
     public_data_api_key: str = ""
     public_data_base_url: str = ""
+    pediatric_api_key: str = ""
+    pediatric_api_url: str = ""
+    emergency_api_key: str = ""
+    emergency_api_url: str = ""
     external_api_timeout_seconds: float = Field(default=5, gt=0)
     external_api_retry_count: int = Field(default=1, ge=0, le=3)
     openai_api_key: str = ""
@@ -75,11 +79,15 @@ def get_hospital_service():
 
     settings = get_settings()
     return HospitalService(
-        settings.public_data_base_url,
-        settings.public_data_api_key,
-        settings.app_timezone,
-        settings.external_api_timeout_seconds,
-        settings.external_api_retry_count,
+        base_url=settings.public_data_base_url,
+        api_key=settings.public_data_api_key,
+        timezone=settings.app_timezone,
+        timeout_seconds=settings.external_api_timeout_seconds,
+        retry_count=settings.external_api_retry_count,
+        pediatric_api_url=settings.pediatric_api_url,
+        pediatric_api_key=settings.pediatric_api_key,
+        emergency_api_url=settings.emergency_api_url,
+        emergency_api_key=settings.emergency_api_key,
     )
 
 

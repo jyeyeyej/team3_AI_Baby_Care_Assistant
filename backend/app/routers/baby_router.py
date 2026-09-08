@@ -134,7 +134,7 @@ async def update_baby_api(
         )
     except ValueError as error:
         raise HTTPException(
-            status_code=400,
+            status_code=404 if "찾을 수 없습니다" in str(error) else 400,
             detail=str(error),
         ) from error
 

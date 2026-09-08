@@ -7,7 +7,7 @@ from common import render_page_header
 
 
 def render() -> None:
-    baby = api.get_baby(st.session_state.baby_id)["data"]
+    baby = api.get_baby(st.session_state.baby_id, user_id=st.session_state.user_id, session_id=st.session_state.session_id)["data"]
     data = api.get_dashboard(st.session_state.baby_id)["data"]
     vaccine = data["next_vaccination"]
     feeding_interval_minutes = st.session_state.get("feeding_interval_minutes", 180)

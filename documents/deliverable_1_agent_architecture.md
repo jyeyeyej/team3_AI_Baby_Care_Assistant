@@ -3,6 +3,32 @@
 > 서비스명: **AI Baby Care Assistant**  
 > 대상: 0~36개월 영유아 보호자를 위한 AI 육아 도우미  
 
+## 팀 프로젝트 개요 
+
+- 팀명: 응애이전트
+- 팀원 및 역할: 총 4명
+    1. 정예진 : 팀장 / 프론트엔드: Streamlit 화면 설계·구현, 반응형 UI, FastAPI 연동
+    2. 신유빈 : 백엔드: FastAPI API, DB·Redis 연동, 인증·기록·알림 기능 구현
+    3. 한다영 : MCP 서버 1: 육아 기록·생활 패턴·성장 분석 관련 MCP 서버 구현
+    4. 한태경 : MCP 서버 2: 병원 정보·육아 정보 검색·RAG 관련 MCP 서버 구현
+- 프로젝트 기간: 2026년 9월 8일 ~ 9월 10일
+- 저장소·협업 링크:
+    - GitHub 저장소: https://github.com/jyeyeyej/team3_AI_Baby_Care_Assistant.git
+    - 협업 문서 또는 Notion: https://app.notion.com/p/3-9-3d4a62ceb52180fab2fdc9fe1fc7ef99?pvs=28
+- 사용한 외부 API 및 도구:
+    - OpenAI API: AI 육아 상담, 음성 STT, 기저귀 사진 분석
+    - 공공데이터포털 API: 전국 병·의원 및 응급의료기관 정보 검색
+    - Streamlit (약간의 html/css): 사용자 화면 구현
+    - FastAPI: 백엔드 API 구현
+    - PostgreSQL / Redis: 아기 정보·육아 기록·알림·메모리 데이터 관리
+    - MCP: AI 기능과 육아 기록·병원 정보 도구 연동
+    - Ollama: 육아 정보 문서 검색용 임베딩 모델
+- 운영 매니저 확인사항:
+    - 테스트 사용자로 로그인 (JWT 구현 안함)
+    - 개인정보 때문에 예방접종 데이터는 mook데이터로 구현
+- 추가 산출물:
+    - 시연 영상
+
 ## 1. 서비스 개요
 
 - **서비스명:** AI Baby Care Assistant

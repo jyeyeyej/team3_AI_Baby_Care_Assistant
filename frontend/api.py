@@ -9,12 +9,19 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+import json
+from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import requests
+from dotenv import load_dotenv
 
+
+# Streamlit is launched from the frontend directory in some environments, so
+# load the project-level settings explicitly instead of relying on its shell.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000").rstrip("/")
 USE_MOCK_API = os.getenv("USE_MOCK_API", "true").lower() == "true"
@@ -58,9 +65,10 @@ def request_backend(
             body = {}
 
         if isinstance(body, dict):
+            error_message = body.get("message") or body.get("detail")
             return {
                 "success": bool(body.get("success", response.ok)),
-                "message": body.get("message", "" if response.ok else "요청을 처리하지 못했습니다."),
+                "message": error_message or ("" if response.ok else "요청을 처리하지 못했습니다."),
                 "data": body.get("data", {}),
                 "request_id": body.get("request_id"),
                 "status_code": response.status_code,
@@ -77,7 +85,7 @@ def request_backend(
 
 
 BABY = {
-    "baby_id": "baby-seoa-001",
+    "baby_id": "baby-001",
     "baby_name": "서아",
     "birth_date": "2026-08-03",
     "age_days": 31,
@@ -91,12 +99,44 @@ BABY = {
 }
 
 
-def test_login(_: str) -> dict:
-    return {"success": True, "data": {"user_id": "guardian-seoa", "baby_id": BABY["baby_id"], "session_id": "demo-session"}}
+def test_login(selected_user: str) -> dict:
+    """Keep the demo account picker, but create a real backend session in live mode."""
+    user_id = "user-001" if selected_user.startswith("서아") else "user-002"
+    if not USE_MOCK_API:
+        return request_backend("POST", "/api/test-login", json={"user_id": user_id})
+    return {"success": True, "data": {"user_id": user_id, "baby_id": BABY["baby_id"], "session_id": "demo-session"}}
 
 
-def get_baby(_: str) -> dict:
-    return {"success": True, "data": BABY.copy()}
+def get_baby(baby_id: str, *, user_id: str | None = None, session_id: str | None = None) -> dict:
+    """Read the logged-in test baby's real profile when the backend is enabled."""
+    if not USE_MOCK_API and user_id and session_id:
+        result = request_backend(
+            "GET",
+            f"/api/babies/{baby_id}",
+            headers={"X-User-Id": user_id, "X-Session-Id": session_id},
+        )
+        if result["success"]:
+            data = result["data"]
+            birth_date = data.get("birth_date", BABY["birth_date"])
+            try:
+                age_days = (date.today() - date.fromisoformat(birth_date)).days
+            except (TypeError, ValueError):
+                age_days = BABY["age_days"]
+            feeding_labels = {"breast": "모유", "formula": "분유", "mixed": "혼합"}
+            return {
+                "success": True,
+                "data": {
+                    **BABY,
+                    **data,
+                    "baby_id": data.get("id", baby_id),
+                    "age_days": age_days,
+                    "feeding_type": feeding_labels.get(data.get("feeding_type"), data.get("feeding_type")),
+                },
+            }
+        return result
+    fallback = BABY.copy()
+    fallback["baby_id"] = baby_id
+    return {"success": True, "data": fallback}
 
 
 def get_dashboard(_: str) -> dict:
@@ -106,7 +146,7 @@ def get_dashboard(_: str) -> dict:
             "feeding": {"average_count": 7, "average_interval": "평균 3시간 10분 간격"},
             "sleep": {"daily_hours": "15시간", "last": "어제 22:10"},
             "diaper": {"daily_count": 5, "detail": "소변 4회 · 대변 1회"},
-            "next_vaccination": {"date": "9월 18일", "name": "DTaP 1차 · IPV 1차", "remaining": "14일 남았어요."},
+            "next_vaccination": {"date": "10월 3일", "name": "DTaP·IPV·Hib 1차", "remaining": "23일 남았어요."},
         },
     }
 
@@ -137,6 +177,27 @@ def get_care_pattern(_: str) -> dict:
     }
 
 
+def search_hospitals(region: str, hospital_type: str, page: int = 1, limit: int = 10) -> dict[str, Any]:
+    """Search hospitals through FastAPI once ``USE_MOCK_API`` is disabled."""
+    if not USE_MOCK_API:
+        return request_backend("GET", "/api/hospitals/search", params={"region": region, "type": hospital_type, "page": page, "limit": limit})
+    return {"success": True, "message": "목데이터 검색 결과입니다.", "data": {"region": region, "type": hospital_type, "data": [], "source": "mock", "checked_at": None, "notice": "실제 병원 검색은 백엔드 연결 후 이용할 수 있습니다."}, "request_id": None, "status_code": 200}
+
+
+def analyze_diaper_image(image_file, baby_id: str, session_id: str, user_id: str, feeding_type: str, has_fever: bool | None = None, stool_count_24h: int | None = None) -> dict[str, Any]:
+    """Upload a diaper image; analysis never saves a care record automatically."""
+    if not USE_MOCK_API:
+        return request_backend("POST", "/api/images/diaper-analysis", files={"image": image_file}, data={"baby_id": baby_id, "session_id": session_id, "user_id": user_id, "feeding_type": feeding_type, "has_fever": has_fever, "stool_count_24h": stool_count_24h})
+    return {"success": True, "message": "목 분석 결과입니다.", "data": {"baby_id": baby_id, "is_analyzable": False, "quality_issues": ["실제 사진 분석은 백엔드 연결 후 이용할 수 있습니다."], "observation": None, "risk": None, "follow_up_questions": [], "sources": [], "warnings": [], "safety_notice": "사진만으로 질환을 진단할 수 없습니다."}, "request_id": None, "status_code": 200}
+
+
+def create_care_log(payload: dict[str, Any], user_id: str, session_id: str) -> dict[str, Any]:
+    """Save an explicitly entered care event through the authenticated API."""
+    if not USE_MOCK_API:
+        return request_backend("POST", "/api/care-logs", json=payload, headers={"X-User-Id": user_id, "X-Session-Id": session_id})
+    return {"success": True, "message": "목데이터에 기록했습니다.", "data": {"event_type": payload["event_type"], "duplicated": False}, "request_id": None, "status_code": 200}
+
+
 def get_growth(_: str) -> dict:
     return {
         "success": True,
@@ -153,24 +214,25 @@ def get_vaccinations(_: str) -> dict:
     return {
         "success": True,
         "data": {
-            "next": {"name": "B형간염 2차", "period": "생후 1개월 권장 일정 기준", "date": "2026. 09. 06 예정"},
+            "next": {"name": "DTaP·IPV·Hib 1차", "period": "생후 2개월 권장 일정 기준", "date": "2026. 10. 03 예정"},
             "items": [
                 ("BCG", "결핵 예방 · 1회", "접종 완료 · 8/10", "done"),
                 ("B형간염 1차", "출생 직후", "접종 완료 · 8/03", "done"),
-                ("B형간염 2차", "생후 1개월", "접종 예정 · 9/06", "soon"),
-                ("DTaP·IPV·Hib 1차", "생후 2개월", "예정 · 10/03", "future"),
+                ("B형간염 2차", "생후 1개월", "접종 완료 · 9/06", "done"),
+                ("DTaP·IPV·Hib 1차", "생후 2개월", "접종 예정 · 10/03", "soon"),
             ],
         },
     }
 
 
-def send_chat(message: str, *, baby_id: str | None = None, session_id: str | None = None) -> dict:
+def send_chat(message: str, *, baby_id: str | None = None, session_id: str | None = None, user_id: str | None = None) -> dict:
     """채팅 API를 통해 Backend Agent와 RAG Tool 선택을 요청한다."""
     if not USE_MOCK_API:
         return request_backend(
             "POST",
             "/api/chat",
             json={"message": message, "baby_id": baby_id, "session_id": session_id},
+            headers={"X-User-Id": user_id or "", "X-Session-Id": session_id or ""},
         )
     return {
         "success": True,
@@ -182,7 +244,56 @@ def send_chat(message: str, *, baby_id: str | None = None, session_id: str | Non
     }
 
 
-def search_hospitals(region: str, *, hospital_type: str = "pediatric") -> dict:
+def stream_chat(message: str, *, baby_id: str | None, session_id: str | None, user_id: str | None):
+    """Yield user-safe progress events from FastAPI's SSE chat endpoint."""
+    if USE_MOCK_API:
+        yield {"event": "completed", "data": send_chat(message, baby_id=baby_id, session_id=session_id, user_id=user_id)}
+        return
+
+    try:
+        response = requests.post(
+            f"{BACKEND_API_URL}/api/chat/stream",
+            json={"message": message, "baby_id": baby_id, "session_id": session_id},
+            headers={"X-User-Id": user_id or "", "X-Session-Id": session_id or ""},
+            stream=True,
+            timeout=API_TIMEOUT_SECONDS,
+        )
+        if not response.ok:
+            try:
+                body = response.json()
+                message_text = body.get("detail") or body.get("message") or "채팅 요청을 처리하지 못했습니다."
+            except ValueError:
+                message_text = "채팅 요청을 처리하지 못했습니다."
+            yield {"event": "error", "data": {"message": message_text}}
+            return
+
+        event_name = "message"
+        event_data: dict[str, Any] = {}
+        # SSE 이벤트는 작으므로 기본 버퍼(512 bytes)를 기다리지 않고 즉시 처리합니다.
+        for raw_line in response.iter_lines(chunk_size=1, decode_unicode=True):
+            line = raw_line.strip() if raw_line else ""
+            if line.startswith("event:"):
+                event_name = line.removeprefix("event:").strip()
+            elif line.startswith("data:"):
+                try:
+                    event_data = json.loads(line.removeprefix("data:").strip())
+                except json.JSONDecodeError:
+                    event_data = {"message": "스트리밍 응답 형식이 올바르지 않습니다."}
+            elif not line:
+                if event_data:
+                    yield {"event": event_name, "data": event_data}
+                event_name, event_data = "message", {}
+    except requests.RequestException:
+        yield {"event": "error", "data": {"message": "서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요."}}
+
+
+def search_hospitals(
+    region: str,
+    *,
+    hospital_type: str = "pediatric",
+    user_id: str,
+    session_id: str,
+) -> dict:
     """지역명 기반 병원 검색 API를 호출한다."""
     if USE_MOCK_API:
         return {
@@ -204,10 +315,19 @@ def search_hospitals(region: str, *, hospital_type: str = "pediatric") -> dict:
         "GET",
         "/api/hospitals/search",
         params={"region": region, "type": hospital_type, "page": 1, "limit": 10},
+        headers={"X-User-Id": user_id, "X-Session-Id": session_id},
     )
 
 
-def analyze_diaper_image(image_file: Any, *, baby_id: str, age_days: int, feeding_type: str) -> dict:
+def analyze_diaper_image(
+    image_file: Any,
+    *,
+    baby_id: str,
+    age_days: int,
+    feeding_type: str,
+    user_id: str,
+    session_id: str,
+) -> dict:
     """기저귀 사진을 분석 API로 보내 관찰 결과와 안전 안내를 받는다."""
     if USE_MOCK_API:
         return {
@@ -225,11 +345,17 @@ def analyze_diaper_image(image_file: Any, *, baby_id: str, age_days: int, feedin
                 "safety_notice": "사진만으로 질환을 진단할 수 없습니다.",
             },
         }
+    feeding_type_code = {"모유": "breast", "분유": "formula", "혼합": "mixed"}.get(feeding_type, feeding_type)
     return request_backend(
         "POST",
         "/api/images/diaper-analysis",
-        data={"baby_id": baby_id, "age_days": age_days, "feeding_type": feeding_type},
-        files={"file": (getattr(image_file, "name", "diaper-image.jpg"), image_file, getattr(image_file, "type", "image/jpeg"))},
+        data={
+            "baby_id": baby_id,
+            "session_id": session_id,
+            "user_id": user_id,
+            "feeding_type": feeding_type_code,
+        },
+        files={"image": (getattr(image_file, "name", "diaper-image.jpg"), image_file, getattr(image_file, "type", "image/jpeg"))},
     )
 
 
@@ -239,6 +365,7 @@ def create_care_log(
     amount_ml: int,
     feeding_type: str,
     session_id: str,
+    user_id: str,
     input_source: str = "ui",
     confirmed_by_user: bool = False,
     idempotency_key: str | None = None,
@@ -266,7 +393,12 @@ def create_care_log(
             "message": f"{feeding_type} {amount_ml}ml를 기록했습니다.",
             "data": {"log_id": "demo-feeding-log", **payload},
         }
-    return request_backend("POST", "/api/care-logs", json=payload)
+    return request_backend(
+        "POST",
+        "/api/care-logs",
+        json=payload,
+        headers={"X-User-Id": user_id, "X-Session-Id": session_id},
+    )
 
 
 def transcribe_audio(audio_file: Any, baby_id: str, session_id: str) -> dict:

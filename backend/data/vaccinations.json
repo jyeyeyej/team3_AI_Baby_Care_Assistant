@@ -1,1 +1,9 @@
-[]
+[
+  {"name": "B형간염", "dose": "1차", "recommended_month": 0},
+  {"name": "BCG", "dose": "1차", "recommended_month": 1},
+  {"name": "DTaP", "dose": "1차", "recommended_month": 2},
+  {"name": "IPV", "dose": "1차", "recommended_month": 2},
+  {"name": "Hib", "dose": "1차", "recommended_month": 2},
+  {"name": "폐렴구균", "dose": "1차", "recommended_month": 2},
+  {"name": "MMR", "dose": "1차", "recommended_month": 12}
+]

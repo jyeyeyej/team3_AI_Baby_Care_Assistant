@@ -1,4 +1,4 @@
-# baby_care_server 최종 개발계획서
+# baby_care_server MCP 개발계획서
 
 > 0~36개월 영유아의 육아 기록 저장·조회·패턴 계산과 기저귀 변 사진 분석을 담당하는 Python MCP 서버
 > 

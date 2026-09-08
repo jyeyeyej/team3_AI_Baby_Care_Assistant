@@ -20,7 +20,15 @@ pytestmark = pytest.mark.skipif(
 def baby_id():
     value = f"record-test-baby-{uuid4().hex}"
     with care_log_repository.connect() as connection, connection.cursor() as cursor:
-        cursor.execute("INSERT INTO babies (id) VALUES (%s)", (value,))
+        cursor.execute(
+            """
+            INSERT INTO babies (
+                id, user_id, baby_name, birth_date, gender, feeding_type, allergies
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+            """,
+            (value, "test-user-001", "기록 테스트 아기", "2026-08-03", "female", "formula", "[]"),
+        )
     yield value
     with care_log_repository.connect() as connection, connection.cursor() as cursor:
         cursor.execute("DELETE FROM care_logs WHERE baby_id = %s", (value,))
@@ -93,7 +101,15 @@ def test_duplicate_key_for_another_baby_is_rejected(baby_id: str) -> None:
     other_baby_id = f"record-test-baby-{uuid4().hex}"
     key = f"record-test-key-{uuid4().hex}"
     with care_log_repository.connect() as connection, connection.cursor() as cursor:
-        cursor.execute("INSERT INTO babies (id) VALUES (%s)", (other_baby_id,))
+        cursor.execute(
+            """
+            INSERT INTO babies (
+                id, user_id, baby_name, birth_date, gender, feeding_type, allergies
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+            """,
+            (other_baby_id, "test-user-002", "중복 테스트 아기", "2026-08-03", "female", "formula", "[]"),
+        )
 
     try:
         first = record_care_event(make_request(baby_id, idempotency_key=key))

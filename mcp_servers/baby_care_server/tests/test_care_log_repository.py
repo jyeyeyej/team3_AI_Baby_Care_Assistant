@@ -26,7 +26,15 @@ def test_ids():
         "sleep_key": f"repo-test-sleep-key-{suffix}",
     }
     with care_log_repository.connect() as connection, connection.cursor() as cursor:
-        cursor.execute("INSERT INTO babies (id) VALUES (%s)", (values["baby_id"],))
+        cursor.execute(
+            """
+            INSERT INTO babies (
+                id, user_id, baby_name, birth_date, gender, feeding_type, allergies
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+            """,
+            (values["baby_id"], "test-user-004", "저장소 테스트 아기", "2026-08-03", "female", "formula", "[]"),
+        )
     yield values
     with care_log_repository.connect() as connection, connection.cursor() as cursor:
         cursor.execute(

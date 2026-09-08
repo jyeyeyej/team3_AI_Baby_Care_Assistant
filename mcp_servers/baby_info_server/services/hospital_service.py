@@ -20,31 +20,39 @@ class RateLimitError(ExternalApiError):
 class HospitalService:
     def __init__(
         self,
-        base_url: str,
-        api_key: str,
-        timezone: str,
+        base_url: str = "",
+        api_key: str = "",
+        timezone: str = "Asia/Seoul",
         timeout_seconds: float = 5.0,
         retry_count: int = 1,
+        *,
+        pediatric_api_url: str = "",
+        pediatric_api_key: str = "",
+        emergency_api_url: str = "",
+        emergency_api_key: str = "",
     ) -> None:
-        self.base_url = base_url
-        self.api_key = api_key
+        self.endpoints = {
+            "pediatric": (pediatric_api_url or base_url, pediatric_api_key or api_key),
+            "emergency": (emergency_api_url or base_url, emergency_api_key or api_key),
+        }
         self.timezone = ZoneInfo(timezone)
         self.timeout_seconds = timeout_seconds
         self.retry_count = retry_count
 
     async def search(self, kind: HospitalKind, region: str, page: int, limit: int) -> dict[str, Any]:
-        if not self.base_url or not self.api_key:
+        base_url, api_key = self.endpoints[kind]
+        if not base_url or not api_key:
             raise ExternalApiError("공공데이터 API 설정이 필요합니다.")
 
         params = {
-            "serviceKey": self.api_key,
+            "serviceKey": api_key,
             "region": region,
             "page": page,
             "limit": limit,
             "type": kind,
             "_type": "json",
         }
-        payload = await self._request(params)
+        payload = await self._request(base_url, params)
 
         raw_items = self._extract_items(payload)
         items = self._normalize_items(kind, raw_items)
@@ -60,13 +68,13 @@ class HospitalService:
             notice=notice,
         ).model_dump(mode="json")
 
-    async def _request(self, params: dict[str, Any]) -> Any:
+    async def _request(self, base_url: str, params: dict[str, Any]) -> Any:
         """일시적인 네트워크 오류만 제한적으로 재시도합니다."""
         last_error: Exception | None = None
         for attempt in range(self.retry_count + 1):
             try:
                 async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                    response = await client.get(self.base_url, params=params)
+                    response = await client.get(base_url, params=params)
                 if response.status_code == 429:
                     raise RateLimitError("공공데이터 API 호출 한도를 초과했습니다.")
                 response.raise_for_status()

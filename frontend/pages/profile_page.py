@@ -4,7 +4,7 @@ import api
 from common import render_page_header
 
 def render() -> None:
-    baby_data=api.get_baby(st.session_state.baby_id)["data"]
+    baby_data=api.get_baby(st.session_state.baby_id, user_id=st.session_state.user_id, session_id=st.session_state.session_id)["data"]
     st.session_state.setdefault("profile_values", baby_data.copy())
     st.session_state.setdefault("profile_editing", False)
     st.session_state.setdefault("guardian_values", {"name": "김서아", "relation": "엄마", "phone": "010-1234-5678", "email": "seoa.guardian@example.com"})

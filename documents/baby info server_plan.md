@@ -1,3 +1,5 @@
+# baby_info_server MCP 개발계획서
+
 > 0~36개월 영유아 보호자를 위한 육아 지식 RAG와 지역명 기반 소아과·응급실 조회를 제공하는 Python MCP 서버
 > 
 

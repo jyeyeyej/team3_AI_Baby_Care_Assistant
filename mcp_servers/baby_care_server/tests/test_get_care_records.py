@@ -24,7 +24,15 @@ KST = ZoneInfo("Asia/Seoul")
 def query_baby_id():
     value = f"query-test-baby-{uuid4().hex}"
     with care_log_repository.connect() as connection, connection.cursor() as cursor:
-        cursor.execute("INSERT INTO babies (id) VALUES (%s)", (value,))
+        cursor.execute(
+            """
+            INSERT INTO babies (
+                id, user_id, baby_name, birth_date, gender, feeding_type, allergies
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+            """,
+            (value, "test-user-003", "조회 테스트 아기", "2026-08-03", "female", "formula", "[]"),
+        )
     yield value
     with care_log_repository.connect() as connection, connection.cursor() as cursor:
         cursor.execute("DELETE FROM care_logs WHERE baby_id = %s", (value,))

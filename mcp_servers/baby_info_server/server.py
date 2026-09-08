@@ -6,7 +6,7 @@ import sys
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.fastmcp import FastMCP
 
 from config import get_settings
 from tools.search_development_guide import run as development_run
@@ -18,7 +18,14 @@ from tools.search_sleep_guide import run as sleep_run
 from tools.search_weaning_guide import run as weaning_run
 
 settings = get_settings()
-mcp = MCPServer("baby_info_server")
+mcp = FastMCP(
+    "baby_info_server",
+    host=settings.mcp_host,
+    port=settings.mcp_port,
+    streamable_http_path=settings.mcp_streamable_http_path,
+    stateless_http=True,
+    json_response=True,
+)
 
 
 @mcp.tool()
@@ -64,9 +71,4 @@ async def search_safety_guide(query: str, baby_age_months: int | None = None, to
 
 
 if __name__ == "__main__":
-    mcp.run(
-        transport="streamable-http",
-        host=settings.mcp_host,
-        port=settings.mcp_port,
-        streamable_http_path=settings.mcp_streamable_http_path,
-    )
+    mcp.run(transport="streamable-http")

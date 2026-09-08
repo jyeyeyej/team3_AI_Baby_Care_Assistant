@@ -4,7 +4,7 @@ import api
 from common import render_page_header
 
 def render() -> None:
-    baby=api.get_baby(st.session_state.baby_id)["data"]
+    baby=api.get_baby(st.session_state.baby_id, user_id=st.session_state.user_id, session_id=st.session_state.session_id)["data"]
     records=api.get_care_records(st.session_state.baby_id)["data"]
     st.session_state.setdefault("care_record_overrides", {})
     for index, override in st.session_state.care_record_overrides.items():
@@ -96,6 +96,27 @@ def render() -> None:
         return
     pattern = api.get_care_pattern(st.session_state.baby_id)["data"]
     vaccination = api.get_vaccinations(st.session_state.baby_id)["data"]
+    with st.expander("💩 기저귀 사진 분석", expanded=False):
+        uploaded_image = st.file_uploader("기저귀 사진", type=["jpg", "jpeg", "png"], key="diaper_image")
+        has_fever = st.checkbox("열이 있어요", key="diaper_fever")
+        stool_count = st.number_input("최근 24시간 대변 횟수", min_value=0, max_value=30, value=0, key="diaper_count")
+        if st.button("사진 분석하기", key="analyze_diaper", type="primary"):
+            if uploaded_image is None:
+                st.warning("분석할 사진을 선택해 주세요.")
+            else:
+                feeding = {"모유": "breast", "분유": "formula", "혼합": "mixed"}.get(baby["feeding_type"], "mixed")
+                response = api.analyze_diaper_image(uploaded_image, st.session_state.baby_id, st.session_state.session_id, st.session_state.user_id, feeding, has_fever, int(stool_count))
+                if response["success"]:
+                    result = response["data"]
+                    if not result["is_analyzable"]:
+                        st.info("다시 촬영해 주세요: " + " ".join(result["quality_issues"]))
+                    else:
+                        risk = result["risk"] or {}
+                        st.success("사진에서 보이는 특징을 정리했습니다.")
+                        st.json({"observation": result["observation"], "risk": risk, "follow_up_questions": result["follow_up_questions"]})
+                    st.caption(result["safety_notice"])
+                else:
+                    st.error(response["message"])
     st.markdown(
         f"""
         <style>

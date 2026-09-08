@@ -1,4 +1,4 @@
-# AI 육아 도우미 프론트엔드 API 계약표
+# AI 육아 도우미 API 계약표
 
 > 프론트엔드(Streamlit)와 FastAPI 사이의 연동 기준입니다. 아래에서 **확정**은 기존 기획 문서에 명시된 내용이며, **백엔드 확정 필요**는 구현 전에 담당자와 정해야 하는 항목입니다.
 
@@ -45,7 +45,14 @@ baby_id
 session_id
 ```
 
-**백엔드 확정 필요:** 각 API에서 이 값을 body, query parameter, header 중 어느 방식으로 받는지와 로그인 응답의 정확한 `data` 구조.
+로그인을 제외한 인증 필요 API는 아래 HTTP 헤더를 사용합니다.
+
+```http
+X-User-Id: user-001
+X-Session-Id: 로그인_응답의_session_id
+```
+
+로그인 성공 `data`는 `user_id`, `guardian_name`, `baby_id`(미등록 사용자는 `null`), `session_id`를 반환합니다.
 
 ---
 
@@ -83,7 +90,13 @@ POST /api/test-login
 
 **프론트 입력:** 선택한 테스트 사용자 식별값
 
-**백엔드 확정 필요:** 요청 필드명(`user_id` 등), 로그인 성공 시 반환하는 보호자·아기·세션 데이터 전체 구조.
+요청 body는 아래와 같습니다.
+
+```json
+{"user_id": "user-001"}
+```
+
+로그인 성공 `data`는 공통 규칙의 `user_id`, `guardian_name`, `baby_id`, `session_id` 구조를 사용합니다.
 
 **프론트 처리:**
 
@@ -141,7 +154,8 @@ POST /api/care-logs
   "event_type": "feeding",
   "input_source": "ui",
   "recorded_at": "2026-09-04T14:30:00+09:00",
-  "idempotency_key": "session-001-ui-unique-key"
+  "idempotency_key": "session-001-ui-unique-key",
+  "confirmed_by_user": false
 }
 ```
 
@@ -261,6 +275,18 @@ PATCH /api/reminders/{reminder_id}
 
 **백엔드 확정 필요:** 수유 간격 설정 저장 API의 경로·요청·응답 구조.
 
+수유 간격 설정 저장 API는 아래로 확정합니다.
+
+```http
+PATCH /api/reminders/feeding/{baby_id}/settings
+```
+
+```json
+{"feeding_interval_minutes": 180}
+```
+
+`feeding_interval_minutes`는 30~720분입니다.
+
 ### 예방접종
 
 ```http
@@ -288,7 +314,7 @@ page=1
 limit=10
 ```
 
-**백엔드 확정 필요:** 병원 종류 파라미터의 실제 이름(`type` 등). 문서상 `pediatric`/`emergency`에 따라 Tool을 선택하는 규칙만 확정되어 있습니다.
+구현 확정: 병원 종류 파라미터 이름은 `type`이며 `pediatric`/`emergency`만 허용합니다. FastAPI는 각각 `search_pediatric_hospitals`/`search_emergency_hospitals` MCP Tool을 호출합니다.
 
 소아과 결과:
 
@@ -302,6 +328,8 @@ limit=10
 ```
 
 응급실 결과는 `operating_hours` 대신 `emergency_level`을 포함할 수 있습니다. `phone`, 운영시간, 응급 등급은 `null`일 수 있으므로 빈 문자열을 강제하지 않습니다. 결과 없음은 오류가 아니며 빈 목록으로 표시합니다.
+
+구현 응답 `data`에는 `region`, `type`, `data`, `source`, `checked_at`, `notice`가 포함됩니다. 공공데이터 API 키 또는 URL이 설정되지 않았거나 MCP 연결에 실패하면 성공 목록을 지어내지 않고 503으로 응답합니다.
 
 ### 기저귀 사진 분석
 

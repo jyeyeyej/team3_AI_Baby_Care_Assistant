@@ -35,6 +35,7 @@ def init_session() -> None:
         "editing_record_index": None,
         "pending_stt_tool_call_id": None,
         "chat_draft": "",
+        "pending_chat_message": "",
         "voice_transcript": "",
         "last_voice_audio_signature": "",
         "pending_stt_record": None,
@@ -48,6 +49,8 @@ def init_session() -> None:
         "diaper_analysis_result": None,
         "last_diaper_signature": "",
         "request_in_progress": False,
+        "quick_record_type": None,
+        "quick_record_notice": "",
         "navigation_restored": False,
     }
     for key, value in defaults.items():
@@ -73,13 +76,6 @@ def restore_navigation_from_url() -> None:
             st.session_state.pending_notice = notice
         st.session_state.last_navigation_query = query_signature
 
-    # 실제 인증이 아닌 테스트 로그인 화면이므로 URL에 테스트 상태만 저장한다.
-    if params.get("demo") == "1":
-        st.session_state.logged_in = True
-        st.session_state.user_id = "guardian-seoa"
-        st.session_state.baby_id = "baby-seoa-001"
-        st.session_state.session_id = "demo-session"
-
     st.session_state.navigation_restored = True
 
 
@@ -88,7 +84,7 @@ def persist_navigation_to_url() -> None:
     if not st.session_state.logged_in:
         return
 
-    desired = {"demo": "1", "page": st.session_state.selected_menu}
+    desired = {"page": st.session_state.selected_menu}
     if st.session_state.selected_menu == "AI 육아 도우미" and st.session_state.chat_topic:
         desired["topic"] = st.session_state.chat_topic
     if st.session_state.selected_menu == "육아 관리" and st.session_state.editing_record_index is not None:

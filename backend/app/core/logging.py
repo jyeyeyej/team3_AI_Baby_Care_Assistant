@@ -1,1 +1,10 @@
-"""Logging configuration."""
+"""Minimal safe logging configuration (never logs API keys or prompts)."""
+
+import logging
+
+
+def configure_logging(level: str = "INFO") -> None:
+    logging.basicConfig(
+        level=getattr(logging, level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
