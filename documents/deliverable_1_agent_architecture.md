@@ -31,13 +31,13 @@
 
 ## 1. 서비스 개요
 
-> 구현 정합성 안내: StateGraph는 서비스의 논리적 목표 흐름이다. 현재 MVP는 입력·권한·승인·기록 저장을 Backend의 결정론적 분기로 우선 통제하고, OpenAI 모델은 의도 분류와 일반 육아 안내 생성에 사용한다. 따라서 본 문서의 모든 노드가 독립 Runtime 노드로 분리 구현됐다는 의미는 아니다.
+> 구현 정합성 안내: 현재 MVP는 Backend의 정책 기반 `AgentLoop`으로 계획 → 허용 Tool 실행 → 결과 검증을 처리하고, 입력·권한·승인·기록 저장은 Backend 정책이 통제한다. Reflection은 필수값 누락 보완 질문, 병원 검색 1회 재시도·안전 종료, RAG 근거 부족 안전 폴백을 수행한다. OpenAI 모델은 의도 분류와 일반 육아 안내 생성에 사용한다. StateGraph의 모든 노드가 독립 Runtime 노드로 분리되거나 모델이 자유롭게 반복 Function Calling을 수행한다는 의미는 아니다.
 
 - **서비스명:** AI Baby Care Assistant
 - **목적:** 수유·수면·배변·성장 기록과 보호자의 질문을 바탕으로, 아기 월령·수유 방식·알레르기를 반영한 육아 정보를 제공한다.
 - **주요 사용자:** 0~36개월 영유아의 보호자
-- **연계 도구:** `baby_care_server` MCP, `baby_info_server` MCP, FastAPI, Redis, PostgreSQL, OpenAI Responses API
-- **Agent 구조:** 하나의 `baby_care_agent`가 요청을 판단하고 허용된 MCP Tool을 선택한다. 결과를 검증하는 단일 에이전트를 구현한다.
+- **연계 도구:** `baby_care_server` MCP, `baby_info_server` MCP, FastAPI, Redis, PostgreSQL. RAG 최종 답변 생성에는 OpenAI Responses API를 사용한다.
+- **Agent 구조:** 현재 MVP는 FastAPI의 정책 기반 `AgentLoop`과 OpenAI Chat Completions 기반 의도 분류·일반 안내를 결합한다. `AgentLoop`은 계획 → 허용된 MCP Tool 실행 → 결과 검증을 수행한다. 아래 StateGraph와 모델 주도 단일 Agent Loop는 이를 확장하는 목표 아키텍처이며, 허용된 MCP Tool 선택·결과 검증 기준을 정의한다.
 
 | 처리 주체 | 담당 기능 |
 | --- | --- |
@@ -210,14 +210,14 @@ sequenceDiagram
 
 ### 장기 기억
 
-- PostgreSQL `user_memories`에 동의한 안정적 사실과 사실 중심 대화 요약을 저장한다.
-- 저장 대상: 월령, 수유 방식, 알레르기, 보호자가 명시한 선호, 다음 대화에 필요한 요약.
+- 현재 MVP는 PostgreSQL `user_memories`에 답변 스타일·길이·단위처럼 안전한 사용자 선호만 저장한다.
+- 아기 월령·수유 방식·알레르기·정확한 육아 기록은 각각 `babies`, `care_logs`를 기준 데이터로 사용한다. 대화 요약 자동 저장은 확장 목표다.
 - 저장 금지: 전체 대화 원문, 모델의 숨겨진 추론, 음성·기저귀 사진 원본, API Key·접속정보.
 
 ### 컨텍스트 윈도우 및 요약 전략
 
 - `Memory Selector`가 현재 의도에 필요한 월령·수유 방식·알레르기·최근 기록만 선택한다.
-- 최근 메시지는 최대 8개만 모델에 제공하고, 오래된 대화는 사실 중심 `conversation_summary`로 바꾼다.
+- 최근 메시지는 최대 8개만 모델에 제공하며 TTL 만료 시 원문은 삭제한다. 오래된 대화의 `conversation_summary` 자동 저장은 확장 목표다.
 - Tool 결과 전문은 보관하지 않고 결과 요약·출처·오류 코드·확인 시점만 남긴다.
 - 관련 없는 기억과 민감한 원문은 모델 컨텍스트에서 제외한다.
 
@@ -260,5 +260,5 @@ sequenceDiagram
 - 모든 요청이 인지 → 판단 → 행동 → 검증을 거쳐 명확한 종료 상태에 도달한다.
 - Function Calling은 Allowlist·소유권·입력값·정책 검증 후에만 실행된다.
 - 텍스트·UI 기록은 검증 후 저장되고, STT 기록은 승인 후 정확히 한 번만 저장된다.
-- 단기 기억은 TTL로 만료되고 장기 기억에는 필요한 요약 사실만 남는다.
+- 단기 기억은 TTL로 만료되고, 현재 장기 기억에는 안전한 답변 선호 정보만 남는다.
 - Tool 실패·빈 결과·권한 오류·최대 단계 초과는 안전한 폴백 응답으로 처리된다.

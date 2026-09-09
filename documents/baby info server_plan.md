@@ -518,7 +518,7 @@ CREATE INDEX idx_document_chunks_document
     ON document_chunks (document_id);
 ```
 
-pgvector 검색 인덱스는 프로젝트에서 사용할 거리 계산 방식과 운영 데이터 규모를 확정한 후 추가합니다.
+현재 인덱서와 스키마는 cosine distance 기반 HNSW pgvector 검색 인덱스를 생성합니다. 운영 데이터 규모에 따라 인덱스 파라미터는 추후 조정할 수 있습니다.
 
 cosine distance를 사용할 경우:
 
@@ -818,7 +818,7 @@ BABY_INFO_MCP_URL=http://baby-info-server:8102/mcp
 
 ## 11. 캐시 정책
 
-일반 육아 정보 검색과 병원 검색 결과만 Redis에 짧게 캐시할 수 있습니다.
+Redis 검색 캐시는 운영 환경 확장 항목입니다. 현재 MVP에서는 병원·RAG 결과를 직접 조회하며, Redis는 Backend의 세션·STT 승인·대화 메모리·Trace 관리에 사용합니다. 운영 환경에서 캐시를 활성화할 경우 일반 육아 정보 검색과 병원 검색 결과만 짧게 캐시할 수 있습니다.
 
 RAG 캐시 키:
 

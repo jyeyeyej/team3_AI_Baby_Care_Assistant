@@ -14,6 +14,7 @@ async def write_chat_trace(
     tool_used: bool, memory_count: int, memory_created: int,
     selected_tools: list[str] | None = None, tool_arguments: list[dict[str, Any]] | None = None,
     result_validation: str = "not_applicable", reflection_action: str = "none",
+    error_type: str | None = None, retry_count: int = 0, execution_stages: list[str] | None = None,
 ) -> None:
     """Store redacted execution facts; never store prompts, transcripts, or secrets."""
     payload = {
@@ -21,6 +22,7 @@ async def write_chat_trace(
         "selected_tools": selected_tools if selected_tools is not None else ([] if not tool_used else ["unknown"]),
         "tool_arguments": tool_arguments or [], "status": "success",
         "result_validation": result_validation, "reflection_action": reflection_action,
+        "error_type": error_type, "retry_count": retry_count, "execution_stages": execution_stages or [],
         "memory_retrieved_count": memory_count, "memory_created_count": memory_created,
     }
     await redis.set(f"trace:{user_id}:{session_id}:{request_id}", json.dumps(payload, ensure_ascii=False), ex=86400)

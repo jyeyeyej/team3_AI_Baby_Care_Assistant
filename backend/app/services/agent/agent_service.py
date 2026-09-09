@@ -17,6 +17,7 @@ from app.mcp_clients.baby_info_client import search_knowledge_from_mcp
 from app.mcp_clients.baby_care_client import get_care_records, record_care_event
 from app.services.info.hospital_service import search_hospitals
 from app.models.baby import Baby
+from .agent_loop import AgentExecution, AgentLoop, AgentPlan, AgentState, RetryableAgentError
 from .memory_service import get_recent_conversation, get_relevant_memories, save_memory_candidate
 from .memory_trace_service import write_chat_trace
 
@@ -54,6 +55,7 @@ def _text_response(answer: str, *, response_type: str = "text") -> dict:
 
 def _reflect_chat_result(chat: dict) -> tuple[str, str]:
     """Validate only observable response facts before returning them to the user."""
+    reflection_hint = chat.pop("_reflection_hint", None)
     if not isinstance(chat.get("answer"), str) or not chat["answer"].strip():
         raise RuntimeError("최종 응답이 비어 있습니다.")
     sources = chat.get("sources", [])
@@ -63,6 +65,10 @@ def _reflect_chat_result(chat: dict) -> tuple[str, str]:
         chat["confidence"] = "low"
         chat["safety_notice"] = "근거 출처를 확인하지 못해 일반 안내로 제공했습니다."
         return "downgraded_missing_sources", "safe_fallback"
+    if reflection_hint == "no_evidence_safe_fallback":
+        return "no_evidence_safe_fallback", "safe_fallback"
+    if chat.get("response_type") == "clarification_required":
+        return "missing_input", "clarification"
     return "passed", "none"
 
 
@@ -545,77 +551,142 @@ async def _validate_context(request, app) -> Baby:
     return baby
 
 
-async def answer_chat(request, app) -> dict:
-    request_id = str(uuid4())
-    baby = await _validate_context(request, app)
-    memories = await get_relevant_memories(app.state.db_engine, request.user_id, request.message)
-    recent_messages = await get_recent_conversation(app.state.redis, request.user_id, request.session_id)
+def _care_plan(message: str) -> AgentPlan | None:
+    """Plan care Tools without executing them, so the policy is traceable first."""
+    today_summary = _today_summary_request(message)
+    if today_summary is not None:
+        return AgentPlan("care", ("get_care_records",), ({"query_type": "today", "summary_type": today_summary},))
+    record = _feeding_record(message)
+    if record is not None:
+        return AgentPlan("care", () if record.get("missing") else ("record_care_event",), () if record.get("missing") else ({"event_type": "feeding", "input_source": "text"},))
+    record = _diaper_record(message)
+    if record is not None:
+        return AgentPlan("care", ("record_care_event",), ({"event_type": "diaper", "input_source": "text"},))
+    record = _sleep_record(message)
+    if record is not None:
+        return AgentPlan("care", () if record.get("missing") else ("record_care_event",), () if record.get("missing") else ({"event_type": "sleep", "input_source": "text"},))
+    if "수유 패턴" in message or ("수유" in message and "패턴" in message):
+        return AgentPlan("care", ("get_care_records",), ({"query_type": "pattern", "days": 7},))
+    return None
+
+
+async def _plan_chat_action(request) -> AgentPlan:
+    """Select one allowlisted route before any MCP call occurs."""
     if _is_allergy_ai_request(request.message):
-        chat = {
-            "response_type": "text",
-            "answer": "AI 일반 안내 · 등록된 알레르기 정보를 반영했어요.\n\n" + await generate_allergy_guidance(request.message, baby, memories, recent_messages),
-            "sources": [],
-            "confidence": "low",
-            "safety_notice": "일반 안내이며 진단·처방을 대신하지 않습니다. 위험 증상은 즉시 119 또는 의료기관에 문의하세요.",
-        }
-        await app.state.redis.rpush(f"chat:{request.user_id}:{request.session_id}", json.dumps({"role": "user", "content": request.message}, ensure_ascii=False), json.dumps({"role": "assistant", "content": chat["answer"]}, ensure_ascii=False))
-        await app.state.redis.ltrim(f"chat:{request.user_id}:{request.session_id}", -8, -1)
-        await app.state.redis.expire(f"chat:{request.user_id}:{request.session_id}", 86400)
-        created = await save_memory_candidate(app.state.db_engine, request.user_id, request.message)
-        await write_chat_trace(app.state.redis, user_id=request.user_id, session_id=request.session_id, baby_id=request.baby_id, request_id=request_id, tool_used=False, memory_count=len(memories), memory_created=created)
-        return {"success": True, "message": "알레르기 AI 안내를 생성했습니다.", "request_id": request_id, "data": chat}
-    care_response = await _handle_care_request(request, baby)
-    if care_response is not None:
-        await write_chat_trace(app.state.redis, user_id=request.user_id, session_id=request.session_id, baby_id=request.baby_id, request_id=request_id, tool_used=True, memory_count=len(memories), memory_created=False)
-        return {"success": True, "message": "요청을 처리했습니다.", "request_id": request_id, "data": care_response}
-    hospital_response = await _handle_hospital_request(request.message)
-    if hospital_response is not None:
-        tool_name = "search_emergency_hospitals" if _hospital_type_for_request(request.message) == "emergency" else "search_pediatric_hospitals"
-        await write_chat_trace(
-            app.state.redis, user_id=request.user_id, session_id=request.session_id, baby_id=request.baby_id,
-            request_id=request_id, tool_used=True, memory_count=len(memories), memory_created=False,
-            selected_tools=[tool_name], tool_arguments=[{"region": _extract_hospital_region(request.message)}],
-            result_validation="passed", reflection_action="none",
-        )
-        return {"success": True, "message": "병원 검색 결과를 조회했습니다.", "request_id": request_id, "data": hospital_response}
+        return AgentPlan("allergy_guidance")
+    care = _care_plan(request.message)
+    if care is not None:
+        return care
+    hospital_type = _hospital_type_for_request(request.message)
+    if hospital_type is not None:
+        region = _extract_hospital_region(request.message)
+        if region is None:
+            return AgentPlan("hospital_clarification")
+        tool_name = "search_emergency_hospitals" if hospital_type == "emergency" else "search_pediatric_hospitals"
+        return AgentPlan("hospital", (tool_name,), ({"region": region, "page": 1, "limit": 3},), can_retry=True)
     category = await classify_category(request.message)
     if category is None:
-        created = await save_memory_candidate(app.state.db_engine, request.user_id, request.message)
-        await write_chat_trace(app.state.redis, user_id=request.user_id, session_id=request.session_id, baby_id=request.baby_id, request_id=request_id, tool_used=False, memory_count=len(memories), memory_created=created)
-        return {"success": True, "message": "지원 범위를 안내했습니다.", "request_id": request_id,
-                "data": {"response_type": "out_of_scope", "answer": OUT_OF_SCOPE, "sources": []}}
+        return AgentPlan("out_of_scope")
     if category == "general_baby":
-        chat = {
+        return AgentPlan("general_guidance")
+    return AgentPlan("rag", (f"search_{category}_guide",), ({"category": category, "top_k": 5},))
+
+
+async def _execute_chat_plan(plan: AgentPlan, request, baby: Baby, memories: list, recent_messages: list[dict]) -> AgentExecution:
+    if plan.route == "allergy_guidance":
+        return AgentExecution({
             "response_type": "text",
-            "answer": await generate_general_baby_guidance(request.message, memories, recent_messages),
-            "sources": [],
-            "confidence": "low",
-            "safety_notice": "일반 육아 안내이며 진단을 대신하지 않습니다.",
-        }
-    else:
+            "answer": "AI 일반 안내 · 등록된 알레르기 정보를 반영했어요.\n\n" + await generate_allergy_guidance(request.message, baby, memories, recent_messages),
+            "sources": [], "confidence": "low",
+            "safety_notice": "일반 안내이며 진단·처방을 대신하지 않습니다. 위험 증상은 즉시 119 또는 의료기관에 문의하세요.",
+        })
+    if plan.route == "care":
+        response = await _handle_care_request(request, baby)
+        if response is None:
+            raise RuntimeError("육아 기록 처리 계획과 실행 결과가 일치하지 않습니다.")
+        return AgentExecution(response)
+    if plan.route == "hospital_clarification":
+        return AgentExecution(_text_response("검색할 지역을 함께 알려주세요. 예: ‘서울 소아과’, ‘신대방동 응급실’, ‘서울 동작구 소아과 찾아줘’", response_type="clarification_required"))
+    if plan.route == "hospital":
+        try:
+            response = await _handle_hospital_request(request.message)
+        except RuntimeError as error:
+            raise RetryableAgentError("hospital_tool_unavailable", "병원 검색 Tool을 일시적으로 사용할 수 없습니다.") from error
+        if response is None:
+            raise RuntimeError("병원 검색 계획과 실행 결과가 일치하지 않습니다.")
+        return AgentExecution(response)
+    if plan.route == "out_of_scope":
+        return AgentExecution({"response_type": "out_of_scope", "answer": OUT_OF_SCOPE, "sources": []})
+    if plan.route == "general_guidance":
+        return AgentExecution({
+            "response_type": "text", "answer": await generate_general_baby_guidance(request.message, memories, recent_messages),
+            "sources": [], "confidence": "low", "safety_notice": "일반 육아 안내이며 진단을 대신하지 않습니다.",
+        })
+    if plan.route == "rag":
+        category = plan.selected_tools[0].removeprefix("search_").removesuffix("_guide")
         age_months = max(0, min(36, (date.today() - baby.birth_date).days // 30))
         result = await search_knowledge_from_mcp(category, request.message, age_months)
         if not result.get("success"):
             raise RuntimeError("육아 정보 검색에 실패했습니다.")
         no_evidence = result.get("confidence") == "low" and not result.get("sources")
-        chat = {
+        return AgentExecution({
             "response_type": "text",
             "answer": await generate_general_baby_guidance(request.message, memories, recent_messages) if no_evidence else result["answer"],
-            "sources": result.get("sources", []),
-            "confidence": result.get("confidence"),
+            "sources": result.get("sources", []), "confidence": result.get("confidence"),
             "safety_notice": result.get("safety_notice") or ("일반 육아 안내이며 진단을 대신하지 않습니다." if no_evidence else None),
-        }
-    result_validation, reflection_action = _reflect_chat_result(chat)
-    await app.state.redis.rpush(f"chat:{request.user_id}:{request.session_id}", json.dumps({"role": "user", "content": request.message}, ensure_ascii=False), json.dumps({"role": "assistant", "content": chat["answer"]}, ensure_ascii=False))
+            **({"_reflection_hint": "no_evidence_safe_fallback"} if no_evidence else {}),
+        })
+    raise RuntimeError("지원하지 않는 Agent 실행 계획입니다.")
+
+
+async def _persist_chat_turn(request, app, chat: dict) -> int:
+    await app.state.redis.rpush(
+        f"chat:{request.user_id}:{request.session_id}",
+        json.dumps({"role": "user", "content": request.message}, ensure_ascii=False),
+        json.dumps({"role": "assistant", "content": chat["answer"]}, ensure_ascii=False),
+    )
     await app.state.redis.ltrim(f"chat:{request.user_id}:{request.session_id}", -8, -1)
     await app.state.redis.expire(f"chat:{request.user_id}:{request.session_id}", 86400)
-    created = await save_memory_candidate(app.state.db_engine, request.user_id, request.message)
-    selected_tools = [] if category == "general_baby" else [f"search_{category}_guide"]
-    tool_arguments = [] if category == "general_baby" else [{"category": category, "top_k": 5}]
+    return await save_memory_candidate(app.state.db_engine, request.user_id, request.message)
+
+
+async def _execute_safe_fallback(plan: AgentPlan, error: RetryableAgentError) -> AgentExecution:
+    """Return a truthful fallback after the one allowed read-only retry is exhausted."""
+    if plan.route == "hospital":
+        return AgentExecution(_text_response(
+            "현재 병원 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요. 위급한 상황이면 119에 연락하세요.",
+            response_type="error",
+        ))
+    raise error
+
+
+async def answer_chat(request, app) -> dict:
+    """Public chat entry point; API contract remains unchanged while execution uses AgentLoop."""
+    state = AgentState(request_id=str(uuid4()))
+    baby = await _validate_context(request, app)
+    memories = await get_relevant_memories(app.state.db_engine, request.user_id, request.message)
+    recent_messages = await get_recent_conversation(app.state.redis, request.user_id, request.session_id)
+    execution = await AgentLoop().run(
+        state,
+        planner=lambda: _plan_chat_action(request),
+        executor=lambda plan: _execute_chat_plan(plan, request, baby, memories, recent_messages),
+        verifier=_reflect_chat_result,
+        fallback=_execute_safe_fallback,
+    )
+    created = await _persist_chat_turn(request, app, execution.response)
+    plan = state.plan or AgentPlan("out_of_scope")
     await write_chat_trace(
         app.state.redis, user_id=request.user_id, session_id=request.session_id, baby_id=request.baby_id,
-        request_id=request_id, tool_used=bool(selected_tools), memory_count=len(memories), memory_created=created,
-        selected_tools=selected_tools, tool_arguments=tool_arguments,
-        result_validation=result_validation, reflection_action=reflection_action,
+        request_id=state.request_id, tool_used=bool(plan.selected_tools), memory_count=len(memories), memory_created=created,
+        selected_tools=list(plan.selected_tools), tool_arguments=list(plan.tool_arguments),
+        result_validation=state.result_validation, reflection_action=state.reflection_action,
+        error_type=state.error_type, retry_count=state.retry_count, execution_stages=state.stages,
     )
-    return {"success": True, "message": "AI 답변을 생성했습니다.", "request_id": request_id, "data": chat}
+    message = "요청을 처리했습니다." if plan.route == "care" else "AI 답변을 생성했습니다."
+    if plan.route == "hospital":
+        message = "병원 검색 결과를 조회했습니다."
+    elif plan.route == "out_of_scope":
+        message = "지원 범위를 안내했습니다."
+    elif plan.route == "allergy_guidance":
+        message = "알레르기 AI 안내를 생성했습니다."
+    return {"success": True, "message": message, "request_id": state.request_id, "data": execution.response}

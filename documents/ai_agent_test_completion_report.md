@@ -221,38 +221,38 @@ SCENARIO = {
 
 전체 판정: **Baseline 자동 테스트, PostgreSQL 기록 통합 시험, Live Agent 탐색 실행 PASS.**
 
-## 7. 발견한 문제와 개선 계획
+## 7. 초기 시험에서 발견한 문제와 보완 결과
 
 ### 발견한 문제
 
 - 실행된 자동 테스트 88개에서는 실패가 없었다.
-- 다만 PostgreSQL 연동 테스트 39개와 Stool RAG DB 연동 테스트 3개는 실행 환경 조건이 없어 건너뛰었다.
-- Live API 호출의 Tool 실행 순서, 실제 Tool 인수, 최종 답변과 Tool Result의 일치 여부를 증명하는 Event Trace는 아직 수집하지 않았다.
+- 초기 실행에서는 PostgreSQL 연동 테스트 39개와 Stool RAG DB 연동 테스트 3개가 환경 조건 때문에 건너뛰었다.
+- 초기 Live Trace는 모든 Tool 사용을 `knowledge_search`로 기록해 실제 Tool 선택을 구분하지 못했다.
 
 ### 원인
 
-- 테스트 환경에 `RUN_DB_TESTS=1`이 설정된 PostgreSQL 통합 환경이 준비되지 않았다.
-- Stool RAG 인덱스·DB를 사용하는 통합 환경도 실행하지 않았다.
-- 현재 Trace는 요약 정보 중심이므로, Scenario별 Tool 선택·인수·결과 검증 이벤트를 추가로 수집해야 한다.
+- 초기 시점에는 `RUN_DB_TESTS=1` PostgreSQL 통합 환경과 Stool RAG DB 환경이 준비되지 않았다.
+- 초기 Trace가 요약 정보 중심이어서 Scenario별 실제 Tool명·인수·결과 검증 정보를 남기지 못했다.
 
 ### 수정 및 재시험 계획
 
 | 항목 | 현재 상태 | 다음 조치 |
 | --- | --- | --- |
-| PostgreSQL 기록 시험 | PENDING | 테스트용 DB를 준비하고 `RUN_DB_TESTS=1`로 재실행 |
+| PostgreSQL 기록 시험 | 완료 | `RUN_DB_TESTS=1`로 재실행하여 27개 통과 |
 | Stool RAG DB 시험 | PENDING | RAG DB·색인을 준비하고 `RUN_RAG_DB_TESTS=1`로 재실행 |
-| Live Agent Trace | 미수집 | `request_id` 기준 Tool·인수·결과·종료 사유를 수집 |
-| Reflection 전후 비교 | 측정 전 | 동일 Scenario를 두 조건에서 실행해 완료율·도구 선택 정확도·응답 일관성·재시행 횟수 계산 |
+| Live Agent Trace | 완료 | `request_id` 기준 실제 Tool명·인수 요약·결과 검증 상태 수집 |
+| Reflection 전후 비교 | Live 파일럿 3건 완료 | 동일 3개 시나리오의 Trace 증빙 정확도 비교; 대규모 오류 주입 평가는 후속 확대 |
 
 ## 8. 결론
 
 이번 시험에서 현재 구현의 자동화된 Baseline 범위는 실패 없이 통과했다. 특히 육아 질문 분류, RAG 응답 카테고리 검증, 일반 육아 안전 안내, 병원 검색 지역 처리 규칙을 확인했다.
 
 - 확인된 정상 행동: 육아 질문 분류, 부적절한 RAG 결과 차단, 안전한 일반 안내, 지역명 기반 병원 검색 입력 처리
-- 남아 있는 시험: PostgreSQL 기반 기록 저장·STT 승인·중복 실행 방지, Stool RAG DB 연동, Live API Trace 검증
+- 완료한 시험: PostgreSQL 기반 기록 저장·STT 승인·중복 실행 방지, Live API Trace 검증
+- 남아 있는 시험: Stool RAG DB 연동과 대규모 오류 주입 기반 Reflection 평가
 - 다음 추가 Scenario: 수유량 누락, 지역 없는 병원 검색, API 타임아웃, 빈 RAG 결과, 승인 Snapshot 변조
 
-대표 Scenario의 자동 테스트 통과만으로 모든 입력과 외부 연동이 안전하다고 결론 내리지 않는다. DB 및 Live Agent 통합 시험을 완료한 뒤 같은 형식으로 결과와 Trace를 추가한다.
+대표 Scenario의 자동 테스트와 DB·Live Agent 통합 시험 통과만으로 모든 입력과 외부 연동이 안전하다고 결론 내리지는 않는다. Stool RAG DB 및 대규모 오류 주입 시험을 같은 형식으로 추가한다.
 
 ## 9. Live API Trace 탐색 실행 결과
 
@@ -266,7 +266,7 @@ SCENARIO = {
 
 이 실행으로 Live API 요청과 Redis 요약 Trace 저장은 확인됐다. Trace에는 원문 대화와 API 키가 포함되지 않았다.
 
-다만 세 요청 모두 selected_tools 값이 knowledge_search로 기록됐다. 일반 육아 안내와 병원 검색의 실제 처리 경로를 구분하지 못하므로, 현재 Trace는 요청 처리 성공과 Trace 저장 여부의 증거로만 사용한다. 실제 Tool명, 인수, 결과, 실행 순서까지 검증하려면 Event 단위 Trace 보강이 필요하다.
+이 초기 Trace는 세 요청의 `selected_tools`를 모두 `knowledge_search`로 기록해 일반 안내와 병원 검색의 실제 처리 경로를 구분하지 못했다. 이 문제는 다음 절의 Trace 보완 및 재시험에서 해결했으며, 초기 결과는 변경 전 비교 기준으로만 사용한다.
 
 ## 10. 보완 구현 및 재시험 결과
 
@@ -280,7 +280,7 @@ SCENARIO = {
 | 서울 동작구 소아과 찾아줘 | search_pediatric_hospitals | region=서울특별시 동작구 | passed | PASS |
 | 생후 1개월 수유 간격을 알려줘 | search_feeding_guide | category=feeding, top_k=5 | passed | PASS |
 
-재시험 Trace는 Tool명, 인수 요약, 결과 검증 상태, Reflection 조치를 기록한다. 일반 육아 안내는 Tool 미호출로 기록됐고, 병원 및 RAG 요청은 기대 Tool과 일치했다.
+재시험 Trace는 Tool명, 인수 요약, 결과 검증 상태, Reflection 조치를 기록한다. 일반 육아 안내는 Tool 미호출로 기록됐고, 병원 및 RAG 요청은 기대 Tool과 일치했다. 이 실측 범위는 일반 안내·병원·RAG 3건이며, 텍스트 기록 경로의 상세 Tool 인수·다단계 실행 순서와 자동 재실행은 후속 통합 Trace 항목이다.
 
 ### 10.2 STT 승인 및 중복 실행 통합 시험
 
@@ -300,4 +300,40 @@ PostgreSQL 통합 환경에서 record_care_event 테스트를 실행했다. RUN_
 | Live Trace Tool 식별 | 모든 Tool 사용이 knowledge_search로 기록 | 실제 Tool명과 인수 요약 기록 |
 | Tool 선택 증빙 | 3개 Live 요청에서 판별 불가 | 3개 Live 요청 모두 기대 Tool과 일치 |
 | STT 승인 통합 시험 | DB 환경 미실행 | PostgreSQL 통합 테스트 27개 통과 |
-| 최종 판정 | 일부 PENDING | 대표 Scenario PASS, 상세 오류 주입 시험은 후속 확대 |
+| 최종 판정 | 일부 PENDING | 대표 Live Scenario 및 통제 Mock 오류 주입 20건 PASS; 외부 API 장애 Live 확대는 후속 |
+
+### 10.4 Reflection 자동 복구 구현 범위
+
+재시험 이후 Backend 정책 기반 `AgentLoop`에 다음 복구 전략을 구현했다. 상태 변경 Tool은 자동 재시도하지 않으며, `idempotency_key` 검증을 우선한다.
+
+| 오류 유형 | 현재 자동 대응 | Trace 항목 |
+| --- | --- | --- |
+| 필수값 누락 | Tool 호출 없이 보완 질문 | `missing_input`, `clarification`, `retry_count=0` |
+| 병원 검색 Tool 일시 오류 | 조회성 Tool만 최대 1회 재시도 후 안전한 오류 안내 | `hospital_tool_unavailable`, `retry_once` 또는 `retry_once_then_safe_fallback` |
+| RAG 근거 부족 | 출처 없는 답변을 high 신뢰도로 제공하지 않고 안전한 일반 안내로 전환 | `no_evidence_safe_fallback`, `safe_fallback` |
+
+### 10.5 통제 Mock 오류 주입 및 전후 평가
+
+`backend/tests/test_reflection_evaluation.py`는 동일한 20개 입력·Agent 계획을 Reflection 미적용과 적용 조건에서 각각 실행한다. 외부 병원 API나 운영 Redis를 중단하지 않도록 Tool·Redis는 통제 Mock으로 구성했다. 따라서 이 수치는 재현 가능한 자동 시험 결과이며, 외부 장애가 발생한 Live 운영 통계로 해석하지 않는다.
+
+| 지표 | Reflection 미적용 | Reflection 적용 | 근거 |
+| --- | ---: | ---: | --- |
+| 태스크 완료율 | 85% (17/20) | 100% (20/20) | 병원 일시 실패·재시도 소진·RAG 근거 없음 3건 복구/안전 종료 |
+| Tool 선택 정확도 | 100% (20/20) | 100% (20/20) | 두 조건 모두 정책 계획의 기대 Tool 일치 |
+| 응답 일관성 | 85% (17/20) | 100% (20/20) | 실행 결과 상태·근거와 최종 응답 대조 |
+| 평균 재시행 횟수 | 0.0회 | 0.1회 | 총 2회 재시도 ÷ 20건 |
+
+병원 Tool을 지속 실패시키는 케이스에서 첫 실패 뒤 한 번만 재시도하고, 두 번째 실패 뒤에는 병원 정보를 지어내지 않는 안전 안내로 종료했다. Trace에는 `error_type=hospital_tool_unavailable`, `retry_count=1`, `reflection_action=retry_once_then_safe_fallback`, `execution_stages=[..., retrying_tool, ..., safe_fallback]`가 기록됨을 자동 검증했다.
+
+### 10.6 자연어 요청 20건 Agent 통합 평가
+
+`backend/tests/test_natural_language_agent_evaluation.py`에서 수유·수면·배변 기록, 기록 조회, 병원 검색, RAG, 일반 육아 안내, 범위 밖, 알레르기 요청으로 구성된 자연어 20건을 현재 Agent 경로로 실행했다.
+
+| 확인 항목 | 결과 |
+| --- | ---: |
+| 자연어 입력 후 기대 Route 일치 | 20/20 |
+| 기대 Tool 선택 일치 | 20/20 |
+| 실행 결과 응답 유형 일치 | 20/20 |
+| Agent 결과 검증 통과 | 20/20 |
+
+외부 MCP·DB 변경·OpenAI 의미 분류는 테스트 경계에서 고정 Stub으로 대체하고, `_plan_chat_action`, `_execute_chat_plan`, `AgentLoop`, 결과 검증기는 실제 구현을 실행했다. 따라서 데이터 변경 없이 자연어 기반 정책 경로를 재현한 자동 통합 시험이다. 실제 OpenAI 모델 정확도와 외부 API 장애율은 Live 환경의 별도 평가 대상이다.

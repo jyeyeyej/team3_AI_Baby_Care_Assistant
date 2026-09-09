@@ -119,6 +119,23 @@ def test_chat_does_not_treat_an_amount_question_as_a_feeding_record():
     assert agent_service._feeding_record("165ml 먹어도 돼?") is None
 
 
+def test_reflection_marks_missing_input_as_a_clarification_without_a_tool_retry():
+    result_validation, action = agent_service._reflect_chat_result({
+        "response_type": "clarification_required", "answer": "수유량을 알려주세요.", "sources": [],
+    })
+    assert (result_validation, action) == ("missing_input", "clarification")
+
+
+def test_reflection_marks_rag_no_evidence_as_a_safe_fallback():
+    chat = {
+        "response_type": "text", "answer": "일반 안내를 제공해요.", "sources": [], "confidence": "low",
+        "_reflection_hint": "no_evidence_safe_fallback",
+    }
+    result_validation, action = agent_service._reflect_chat_result(chat)
+    assert (result_validation, action) == ("no_evidence_safe_fallback", "safe_fallback")
+    assert "_reflection_hint" not in chat
+
+
 def test_chat_preserves_explicit_relative_record_time():
     now = datetime(2026, 9, 9, 12, 0, tzinfo=timezone.utc)
     assert agent_service._relative_recorded_at("30분전에 100ml 수유했어", now=now) == "2026-09-09T11:30:00+00:00"

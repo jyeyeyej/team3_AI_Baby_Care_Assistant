@@ -3,6 +3,8 @@
 > 0~36개월 영유아의 육아 기록 저장·조회·패턴 계산과 기저귀 변 사진 분석을 담당하는 Python MCP 서버
 > 
 
+> 구현 정합성 안내: 현재 서버는 기록 저장, 기록 조회, 기저귀 변 사진 분석의 MCP Tool 3개를 제공한다. STT 변환·승인 상태·알림·병원 검색은 이 서버가 아니라 FastAPI Backend 또는 baby_info_server의 책임이다.
+
 ## 1. 서버 책임
 
 ### 담당
@@ -524,8 +526,7 @@ STT는 FastAPI 백엔드가 담당하며 `baby_care_server`는 음성 파일을 
 보호자 음성 업로드
 → FastAPI에서 음성 파일 형식·크기 검증
 → FastAPI가 STT API 호출
-→ 변환된 텍스트를 AI Agent에 전달
-→ Agent가 육아 기록 의도와 필드 추출
+→ Backend 규칙 기반 추출기로 수유·수면·배변 기록 필드 추출
 → FastAPI가 사용자에게 기록 내용 확인 요청
 → 승인 전 데이터를 Redis에 임시 저장
 → 사용자 승인
@@ -545,7 +546,7 @@ AI Agent는 먼저 확인용 응답을 생성합니다.
 
 ```json
 {
-  "response_type": "record_confirmation",
+  "response_type": "stt_record_approval",
   "message": "서아가 현재 시간에 분유 100ml를 먹은 것으로 기록할까요?",
   "tool_call_id": "tool-call-001",
   "options": [
@@ -564,13 +565,18 @@ AI Agent는 먼저 확인용 응답을 생성합니다.
 승인 전 데이터는 FastAPI가 Redis에 임시 저장합니다. 이 Redis 값은 `baby_care_server`가 직접 관리하지 않습니다.
 
 ```
-stt_approval:{tool_call_id}
+stt_approval:{user_id}:{session_id}:{tool_call_id}
 ```
 
 ```json
 {
   "tool_name": "record_care_event",
-  "status": "pending",
+  "user_id": "user-001",
+  "session_id": "session-001",
+  "request_id": "request-001",
+  "status": "waiting_stt_approval",
+  "expires_at": "2026-09-03T14:40:00+09:00",
+  "idempotency_key": "session-001-tool-call-001",
   "baby_id": "baby-001",
   "arguments": {
     "event_type": "feeding",
