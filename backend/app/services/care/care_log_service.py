@@ -1,9 +1,10 @@
 """Care MCP를 이용한 육아 기록 업무를 처리합니다."""
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 import json
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.mcp_clients.baby_care_client import (
@@ -11,6 +12,8 @@ from app.mcp_clients.baby_care_client import (
     record_care_event,
 )
 from app.schemas.care import CareLogCreateRequest, CareLogUpdateRequest, CareRecordsQuery
+from app.models.care_log import CareLog
+from app.core.config import APP_TIMEZONE
 from app.services.baby_service import get_baby
 
 
@@ -62,6 +65,8 @@ async def create_care_log(
 
     if care_request.event_type == "sleep":
         arguments["action"] = care_request.action
+        if care_request.duration_minutes is not None:
+            arguments["duration_minutes"] = care_request.duration_minutes
 
     if care_request.event_type == "diaper":
         arguments["urine"] = care_request.urine
@@ -72,6 +77,9 @@ async def create_care_log(
 
         if care_request.consistency is not None:
             arguments["consistency"] = care_request.consistency
+
+        if care_request.note is not None:
+            arguments["memo"] = care_request.note
 
         if care_request.note is not None:
             arguments["note"] = care_request.note
@@ -116,6 +124,76 @@ async def get_care_logs(
     result = await get_care_records_from_mcp(arguments)
 
     return get_mcp_data(result)
+
+
+async def get_care_summary(
+    session: AsyncSession,
+    user_id: str,
+    baby_id: str,
+    days: int = 7,
+) -> dict:
+    """최근 저장된 육아 기록만으로 대시보드 요약 수치를 계산합니다."""
+    await get_baby(session, user_id, baby_id)
+    start_at = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = (
+        await session.execute(
+            select(CareLog)
+            .where(CareLog.baby_id == baby_id, CareLog.recorded_at >= start_at)
+            .order_by(CareLog.recorded_at.asc())
+        )
+    ).scalars().all()
+
+    feedings = [row for row in rows if row.log_type == "feeding"]
+    amounts = [float(row.details["amount_ml"]) for row in feedings if row.details.get("amount_ml") is not None]
+    intervals = [
+        (current.recorded_at - previous.recorded_at).total_seconds() / 60
+        for previous, current in zip(feedings, feedings[1:])
+    ]
+    local_timezone = ZoneInfo(APP_TIMEZONE)
+    today = datetime.now(local_timezone).date()
+    dates = [today - timedelta(days=offset) for offset in range(days - 1, -1, -1)]
+    intervals_by_date: dict[date, list[float]] = {day: [] for day in dates}
+    for previous, current in zip(feedings, feedings[1:]):
+        previous_day = previous.recorded_at.astimezone(local_timezone).date()
+        current_day = current.recorded_at.astimezone(local_timezone).date()
+        if previous_day == current_day and current_day in intervals_by_date:
+            intervals_by_date[current_day].append(
+                (current.recorded_at - previous.recorded_at).total_seconds() / 60
+            )
+    sleep_minutes = [
+        int(row.details["duration_minutes"])
+        for row in rows
+        if row.log_type == "sleep" and row.details.get("duration_minutes") is not None
+    ]
+    stool_count = sum(
+        row.details.get("stool") is True for row in rows if row.log_type == "diaper"
+    )
+
+    return {
+        "period_days": days,
+        "feeding": {
+            "count": len(feedings),
+            "average_amount_ml": round(sum(amounts) / len(amounts), 1) if amounts else None,
+            "average_interval_minutes": round(sum(intervals) / len(intervals), 1) if intervals else None,
+            "daily_average_count": round(len(feedings) / days, 1),
+            "daily_intervals": [
+                {
+                    "date": day.isoformat(),
+                    "weekday": "월화수목금토일"[day.weekday()],
+                    "average_interval_minutes": round(sum(values) / len(values), 1) if values else None,
+                }
+                for day, values in intervals_by_date.items()
+            ],
+        },
+        "sleep": {
+            "total_minutes": sum(sleep_minutes),
+            "daily_average_minutes": round(sum(sleep_minutes) / days, 1) if sleep_minutes else 0,
+        },
+        "diaper": {
+            "stool_count": stool_count,
+            "daily_average_stool_count": round(stool_count / days, 1),
+        },
+    }
 
 
 async def get_care_pattern(

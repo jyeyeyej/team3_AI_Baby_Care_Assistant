@@ -242,16 +242,40 @@ def get_dashboard(_: str) -> dict:
     }
 
 
-def get_care_records(_: str) -> dict:
+def get_care_records(baby_id: str, *, user_id: str | None = None, session_id: str | None = None) -> dict:
+    """Read saved care logs so the care page reflects alarm, text, and voice entries."""
+    if not USE_MOCK_API:
+        headers = {}
+        if user_id:
+            headers["X-User-Id"] = user_id
+        if session_id:
+            headers["X-Session-Id"] = session_id
+        return request_backend(
+            "GET",
+            "/api/care-logs",
+            params={"baby_id": baby_id, "query_type": "today"},
+            headers=headers,
+        )
     return {
         "success": True,
         "data": [
-            {"time": "오늘 14:30", "icon": "🍼", "title": "분유 수유", "detail": "100ml · 알림 확인으로 기록"},
-            {"time": "오늘 12:05", "icon": "🌙", "title": "낮잠 종료", "detail": "10:20–12:05 · 1시간 45분"},
-            {"time": "오늘 09:40", "icon": "💩", "title": "기저귀 · 대변", "detail": "노란색, 묽은 형태 · 사진 분석 메모 있음"},
-            {"time": "9월 2일", "icon": "📏", "title": "성장 측정", "detail": "몸무게 4.2kg · 키 54.1cm · 머리둘레 37cm"},
+            {"time": "오늘 14:30", "icon": "🍼", "title": "분유 수유", "detail": "100ml · 알림 확인으로 기록", "event_type": "feeding"},
+            {"time": "오늘 12:05", "icon": "🌙", "title": "낮잠 종료", "detail": "10:20–12:05 · 1시간 45분", "event_type": "sleep"},
+            {"time": "오늘 09:40", "icon": "💩", "title": "기저귀 · 대변", "detail": "노란색, 묽은 형태 · 사진 분석 메모 있음", "event_type": "diaper"},
+            {"time": "9월 2일", "icon": "📏", "title": "성장 측정", "detail": "몸무게 4.2kg · 키 54.1cm · 머리둘레 37cm", "event_type": "growth"},
         ],
     }
+
+
+def delete_care_log(log_id: str, *, user_id: str, session_id: str) -> dict:
+    """Delete one saved care log owned by the signed-in user."""
+    if USE_MOCK_API:
+        return {"success": True, "message": "육아 기록을 삭제했습니다.", "data": {"log_id": log_id}}
+    return request_backend(
+        "DELETE",
+        f"/api/care-logs/{log_id}",
+        headers={"X-User-Id": user_id, "X-Session-Id": session_id},
+    )
 
 
 def get_care_pattern(_: str) -> dict:
@@ -559,6 +583,51 @@ def create_care_log(
     )
 
 
+def create_quick_care_log(
+    baby_id: str,
+    *,
+    event_type: str,
+    session_id: str,
+    user_id: str,
+    **details: Any,
+) -> dict:
+    """Save a non-feeding quick record through the existing care-log API."""
+    payload = {
+        "baby_id": baby_id,
+        "event_type": event_type,
+        "input_source": "ui",
+        "recorded_at": datetime.now().astimezone().isoformat(),
+        "idempotency_key": f"{session_id}-{event_type}-{uuid4().hex}",
+        **details,
+    }
+    if USE_MOCK_API:
+        return {"success": True, "message": "육아 기록을 저장했습니다.", "data": payload}
+    return request_backend(
+        "POST",
+        "/api/care-logs",
+        json=payload,
+        headers={"X-User-Id": user_id, "X-Session-Id": session_id},
+    )
+
+
+def get_care_summary(baby_id: str, *, user_id: str, session_id: str) -> dict:
+    """최근 저장 기록을 집계한 육아 관리 상단 요약을 조회합니다."""
+    if not USE_MOCK_API:
+        return request_backend(
+            "GET",
+            f"/api/care-summary/{baby_id}",
+            params={"days": 7},
+            headers={"X-User-Id": user_id, "X-Session-Id": session_id},
+        )
+    return {
+        "success": True,
+        "data": {
+            "period_days": 7,
+            "feeding": {"count": 47, "average_amount_ml": 96, "average_interval_minutes": 192},
+            "sleep": {"total_minutes": 5964, "daily_average_minutes": 852},
+            "diaper": {"stool_count": 19},
+        },
+    }
 def transcribe_audio(audio_file: Any, baby_id: str, session_id: str, user_id: str) -> dict:
     """음성 파일을 STT API로 보내고, 사용자가 확인할 텍스트를 반환한다.
 

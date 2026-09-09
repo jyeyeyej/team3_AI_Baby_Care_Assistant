@@ -35,6 +35,7 @@ def init_session() -> None:
         "last_navigation_query": None,
         "pending_notice": "",
         "editing_record_index": None,
+        "editing_record_type": None,
         "pending_stt_tool_call_id": None,
         "chat_draft": "",
         "chat_draft_nonce": 0,
@@ -54,6 +55,7 @@ def init_session() -> None:
         "last_diaper_signature": "",
         "request_in_progress": False,
         "quick_record_type": None,
+        "quick_edit_mode": False,
         "quick_record_notice": "",
         "navigation_restored": False,
     }
@@ -123,8 +125,8 @@ def apply_style() -> None:
         }
         .block-container, [data-testid="stMainBlockContainer"] { max-width: 1080px !important; padding: 1.6rem 1.35rem 2rem; margin: 0 auto; }
         [data-testid="stSidebar"] { background: #FFFFFF; border-right: 1px solid #E3E7F1;
-            min-width: 230px !important; max-width: 230px !important; }
-        [data-testid="stSidebar"] > div:first-child { min-width: 230px !important; max-width: 230px !important; }
+            min-width: 180px !important; max-width: 180px !important; }
+        [data-testid="stSidebar"] > div:first-child { min-width: 180px !important; max-width: 180px !important; }
         [data-testid="stSidebar"] > div:first-child { padding-top: 1.1rem; }
         /* pages/ 폴더에서 Streamlit이 자동 생성하는 메뉴는 사용하지 않습니다. */
         [data-testid="stSidebarNav"] { display: none; }

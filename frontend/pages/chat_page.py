@@ -25,10 +25,10 @@ def _save_feeding(baby: dict, amount_ml: int) -> None:
         st.session_state.feeding_save_message = result.get("message", "수유 기록을 저장하지 못했습니다.")
 
 
-def _approve_stt_record(baby: dict) -> None:
+def _approve_stt_record(baby: dict) -> bool:
     pending = st.session_state.pending_stt_record
     if not pending:
-        return
+        return False
     result = api.confirm_stt_record(
         tool_call_id=pending["tool_call_id"],
         baby_id=baby["baby_id"],
@@ -39,8 +39,10 @@ def _approve_stt_record(baby: dict) -> None:
     if result["success"]:
         st.session_state.chat_messages.append(("ai", result["message"]))
         st.session_state.pending_stt_record = None
+        return True
     else:
         st.error(result.get("message", "음성 기록을 저장하지 못했습니다."))
+        return False
 
 
 def _cancel_stt_record(baby: dict) -> None:
@@ -130,6 +132,9 @@ def _render_chat_feeding_reminder(baby: dict) -> None:
         )
         st.markdown(
             "<style>"
+            ".st-key-voice_recorder_row{margin-top:-57px!important;margin-bottom:-54px!important;position:relative;z-index:2;pointer-events:none}"
+            ".st-key-voice_recorder_row button{pointer-events:auto}"
+            "[data-testid='stHorizontalBlock']:has(.st-key-topic_feeding){margin-top:-20px!important}"
             "@media(max-width:700px){"
             "[data-testid='stHorizontalBlock']:has(.st-key-chat_feeding_done){flex-wrap:nowrap!important;gap:.35rem!important}"
             "[data-testid='stHorizontalBlock']:has(.st-key-chat_feeding_done)>[data-testid='stColumn']{min-width:0!important;width:auto!important}"
@@ -216,6 +221,14 @@ def _send_draft(widget_key: str) -> None:
     st.session_state[widget_key] = ""
 
 
+def _queue_chat_form_submission() -> None:
+    """Run before the form redraw so one submit produces one chat request."""
+    draft_key = st.session_state.get("chat_draft_widget_key", "chat_draft")
+    draft = str(st.session_state.get(draft_key, "")).strip()
+    if draft:
+        st.session_state.pending_chat_message = draft
+
+
 def _format_hospital_message(region: str, data: dict) -> str:
     items = data.get("items", data.get("data", []))
     if not items:
@@ -273,10 +286,16 @@ def render() -> None:
     # audio_input is rendered after chat_draft. Move a completed STT result on
     # the next rerun, before Streamlit instantiates the text input widget.
     st.session_state.setdefault("pending_voice_draft", "")
+    st.session_state.setdefault("voice_status_message", "")
+    st.session_state.setdefault("chat_draft_widget_key", "chat_draft")
     pending_voice_draft = st.session_state.pending_voice_draft
     if pending_voice_draft:
-        st.session_state.chat_draft = pending_voice_draft
+        st.session_state.chat_draft_nonce += 1
+        draft_key = f"chat_draft_voice_{st.session_state.chat_draft_nonce}"
+        st.session_state.chat_draft_widget_key = draft_key
+        st.session_state[draft_key] = pending_voice_draft
         st.session_state.pending_voice_draft = ""
+        st.session_state.voice_status_message = "입력칸 반영 완료"
     st.session_state.setdefault("show_diaper_capture", False)
     st.session_state.setdefault("pending_hospital_search", False)
     topic_questions = {
@@ -319,15 +338,24 @@ def render() -> None:
 
             pending_stt = st.session_state.pending_stt_record
             if pending_stt:
+                if pending_stt.get("event_type") == "diaper":
+                    diaper_kind = "소변·대변" if pending_stt["urine"] and pending_stt["stool"] else "소변" if pending_stt["urine"] else "대변"
+                    confirmation_message = f"기저귀 {diaper_kind} 기록을 저장할까요?"
+                elif pending_stt.get("event_type") == "sleep":
+                    hours, minutes = divmod(pending_stt["duration_minutes"], 60)
+                    duration_label = f"{hours}시간" + (f" {minutes}분" if minutes else "")
+                    confirmation_message = f"수면 {duration_label} 기록을 저장할까요?"
+                else:
+                    confirmation_message = f"{pending_stt['feeding_type']} {pending_stt['amount_ml']}ml를 기록할까요?"
                 st.markdown(
                     "<div class='chat-ai'><b>내용을 확인해 주세요. DB에 저장됩니다.</b><br>"
-                    f"{pending_stt['feeding_type']} {pending_stt['amount_ml']}ml를 기록할까요?</div>",
+                    f"{confirmation_message}</div>",
                     unsafe_allow_html=True,
                 )
                 approve_col, cancel_col, _ = st.columns([1, 1, 3])
                 if approve_col.button("승인", key="approve_stt_record", type="primary", use_container_width=True):
-                    _approve_stt_record(baby)
-                    st.rerun()
+                    if _approve_stt_record(baby):
+                        st.rerun()
                 if cancel_col.button("취소", key="cancel_stt_record", use_container_width=True):
                     _cancel_stt_record(baby)
                     st.rerun()
@@ -447,43 +475,66 @@ def render() -> None:
             "[data-testid='stHorizontalBlock']:has(.st-key-chat_send_message)>[data-testid='stColumn']{min-width:0!important}"
             "[data-testid='stHorizontalBlock']:has(.st-key-chat_send_message)>[data-testid='stColumn']:first-child{flex:0 0 100%!important;width:100%!important}"
             "[data-testid='stHorizontalBlock']:has(.st-key-chat_send_message)>[data-testid='stColumn']:nth-child(2),[data-testid='stHorizontalBlock']:has(.st-key-chat_send_message)>[data-testid='stColumn']:nth-child(3){flex:1 1 0!important;width:calc(50% - .3rem)!important}"
+            ".st-key-voice_recorder_row{margin:0!important;height:0!important;position:relative!important;z-index:3!important;pointer-events:none}"
+            ".st-key-voice_recorder_row button{position:absolute!important;top:-56px!important;left:0!important;width:calc(50% - .3rem)!important;pointer-events:auto!important}"
+            "[data-testid='stHorizontalBlock']:has(.st-key-topic_feeding){margin-top:-48px!important}"
             "}"
             "</style>",
             unsafe_allow_html=True,
         )
-        # audio_input must stay outside a form: a form delays widget updates
-        # until its submit button is pressed, so stopping a recording would not
-        # start STT immediately.
-        input_col, voice_col, send_col = st.columns([7, 1, 1])
-        draft = input_col.text_input(
-            "채팅 입력",
-            key="chat_draft",
-            placeholder="육아 기록이나 궁금한 점을 입력하세요",
-            label_visibility="collapsed",
-        )
-        with voice_col:
-            with st.popover("🎙️", help="음성으로 입력", use_container_width=True):
-                st.caption("녹음한 내용을 확인한 뒤 기록 여부를 선택할 수 있어요.")
-                voice_file = st.audio_input("음성 녹음", key=f"chat_voice_file_{st.session_state.voice_recording_counter}", label_visibility="collapsed")
-                if voice_file is not None:
-                    signature = f"{voice_file.name}:{voice_file.size}"
-                    if signature != st.session_state.last_voice_audio_signature:
-                        result = api.transcribe_audio(voice_file, baby_id=baby["baby_id"], session_id=st.session_state.session_id, user_id=st.session_state.user_id)
-                        if result["success"]:
-                            st.session_state.last_voice_audio_signature = signature
-                            data = result["data"]
-                            transcript = str(data.get("transcript", "")).strip()
-                            if transcript:
-                                # Set this before the next run so Streamlit can
-                                # initialize the text widget with the STT text.
-                                # The user can then edit it and press Send.
-                                st.session_state.pending_voice_draft = transcript
-                            st.rerun()
-                        else:
-                            st.error(result.get("message", "음성을 인식하지 못했습니다."))
-        if send_col.button("↑", key="chat_send_message", type="primary", use_container_width=True) and draft.strip():
-            st.session_state.pending_chat_message = draft.strip()
-            st.rerun()
+        # A form submits only on Enter or the submit button.  Unlike a text
+        # input change callback, it cannot replay an old browser change event
+        # during a Streamlit rerun.
+        with st.form("chat_message_form", clear_on_submit=True, border=False):
+            input_col, voice_col, send_col = st.columns([7, 1, 1])
+            draft = input_col.text_input(
+                "채팅 입력",
+                key=st.session_state.chat_draft_widget_key,
+                placeholder="육아 기록이나 궁금한 점을 입력하세요",
+                label_visibility="collapsed",
+            )
+            with voice_col:
+                st.empty()
+            submitted = send_col.form_submit_button(
+                "↑",
+                key="chat_send_message",
+                type="primary",
+                use_container_width=True,
+                on_click=_queue_chat_form_submission,
+            )
+
+        with st.container(key="voice_recorder_row"):
+            voice_space, voice_col, _ = st.columns([7, 1, 1])
+            with voice_col:
+                with st.popover("🎙️", help="음성으로 입력", use_container_width=True):
+                    st.caption("녹음을 마치면 자동으로 음성을 텍스트로 바꿉니다.")
+                    audio_input = getattr(st, "audio_input", None)
+                    if audio_input is None:
+                        st.warning("현재 Streamlit 버전에서는 음성 녹음을 지원하지 않습니다.")
+                    else:
+                        voice_audio = audio_input(
+                            "음성 녹음",
+                            key=f"chat_voice_recording_{st.session_state.voice_recording_counter}",
+                            label_visibility="collapsed",
+                        )
+                        if voice_audio is not None:
+                            st.session_state.voice_status_message = "녹음 완료 · 텍스트 변환 요청 중"
+                            with st.spinner("텍스트 변환 요청 중..."):
+                                result = api.transcribe_audio(
+                                    voice_audio,
+                                    baby["baby_id"],
+                                    st.session_state.session_id,
+                                    st.session_state.user_id,
+                                )
+                            if result["success"]:
+                                data = result["data"]
+                                st.session_state.pending_voice_draft = data.get("transcript", "")
+                                st.session_state.voice_recording_counter += 1
+                                st.rerun()
+                            else:
+                                error_message = result.get("message", "음성을 텍스트로 바꾸지 못했습니다.")
+                                st.session_state.voice_status_message = f"실패: {error_message}"
+                                st.error(st.session_state.voice_status_message)
 
         topic_buttons = [
             ("feeding", "🍼 월령별 수유"),
@@ -525,8 +576,14 @@ def render() -> None:
                 ("🍼 수유", "🌙 수면", "💩 배변"),
             ):
                 if column.button(label, key=f"quick_record_{record_type}", use_container_width=True):
-                    st.session_state.editing_record_index = {"feeding": 0, "sleep": 1, "diaper": 2}[record_type]
+                    # Match the existing pencil-button edit pages exactly.
+                    edit_index = {"feeding": 0, "sleep": 1, "diaper": 2}[record_type]
+                    st.session_state.quick_record_type = None
+                    st.session_state.quick_edit_mode = True
+                    st.session_state.editing_record_index = None
                     st.session_state.selected_menu = "육아 관리"
+                    st.query_params.clear()
+                    st.query_params.update({"page": "육아 관리", "edit_record": str(edit_index), "quick_edit": "1"})
                     st.rerun()
     with right:
         with st.container(border=True):

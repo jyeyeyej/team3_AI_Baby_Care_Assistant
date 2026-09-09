@@ -16,6 +16,7 @@ def record_care_event(
     feeding_type: Literal["breast", "formula", "mixed"] | None = None,
     amount_ml: int | None = None,
     action: Literal["start", "end"] | None = None,
+    duration_minutes: int | None = None,
     urine: bool | None = None,
     stool: bool | None = None,
     color: str | None = None,
@@ -30,7 +31,7 @@ def record_care_event(
         baby_id=baby_id, event_type=event_type, input_source=input_source,
         idempotency_key=idempotency_key, recorded_at=recorded_at,
         confirmed_by_user=confirmed_by_user, feeding_type=feeding_type,
-        amount_ml=amount_ml, action=action, urine=urine, stool=stool,
+        amount_ml=amount_ml, action=action, duration_minutes=duration_minutes, urine=urine, stool=stool,
         color=color, consistency=consistency, memo=memo, weight_kg=weight_kg,
         height_cm=height_cm, head_circumference_cm=head_circumference_cm,
     )

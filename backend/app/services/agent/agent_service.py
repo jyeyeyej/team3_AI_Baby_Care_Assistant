@@ -155,20 +155,87 @@ async def generate_general_baby_guidance(message: str, memories: list | None = N
         return fallback
 
 
+def _extract_amount_ml(message: str) -> int | None:
+    """Read a numeric or Korean-number amount immediately before ml units."""
+    match = re.search(
+        r"(\d{1,3}|[일이삼사오육칠팔구영공십백]+)\s*(?:ml|밀리(?:리터)?)",
+        message,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+
+    value = match.group(1)
+    if value.isdigit():
+        amount = int(value)
+    else:
+        digits = {"영": 0, "공": 0, "일": 1, "이": 2, "삼": 3, "사": 4,
+                  "오": 5, "육": 6, "칠": 7, "팔": 8, "구": 9}
+        amount = 0
+        pending = 0
+        for character in value:
+            if character in digits:
+                pending = digits[character]
+            elif character == "백":
+                amount += (pending or 1) * 100
+                pending = 0
+            elif character == "십":
+                amount += (pending or 1) * 10
+                pending = 0
+        amount += pending
+    return amount if 0 < amount <= 500 else None
+
+
 def _feeding_record(message: str) -> dict | None:
     """Parse only explicit, bounded text feeding records; never guess an amount."""
-    if not any(word in message for word in ("먹었", "마셨", "수유했", "기록해", "기록해줘")):
+    is_feeding_action = any(word in message for word in ("먹었", "마셨", "수유했", "기록해", "기록해줘"))
+    is_spaced_feeding_action = "수유" in message and "했" in message
+    if not is_feeding_action and not is_spaced_feeding_action:
         return None
-    amount_match = re.search(r"(\d{1,3})\s*(?:ml|밀리(?:리터)?)", message, re.IGNORECASE)
-    if amount_match is None:
+    amount_ml = _extract_amount_ml(message)
+    if amount_ml is None:
         return {"missing": True}
     feeding_type = "breast" if "모유" in message else "formula" if "분유" in message else None
-    if feeding_type is None:
+    return {"amount_ml": amount_ml, "feeding_type": feeding_type}
+
+
+def _diaper_record(message: str) -> dict | None:
+    """소변·대변을 명시한 채팅 문장을 기저귀 기록으로 변환합니다."""
+    compact = message.replace(" ", "")
+    if not any(word in compact for word in ("봤", "쌌", "했", "기록", "방금")):
+        return None
+    urine = any(word in compact for word in ("소변", "오줌", "쉬했", "쉬쌌"))
+    stool = any(word in compact for word in ("대변", "응가", "똥"))
+    if not urine and not stool:
+        return None
+    return {"urine": urine, "stool": stool}
+
+
+def _sleep_record(message: str) -> dict | None:
+    """수면 시간까지 말한 채팅 문장을 완료 수면 기록으로 변환합니다."""
+    compact = message.replace(" ", "")
+    if not any(word in compact for word in ("수면", "낮잠", "잤어", "잠잤")):
+        return None
+
+    korean_hours = {"한": 1, "두": 2, "세": 3, "네": 4, "다섯": 5, "여섯": 6, "일곱": 7, "여덟": 8, "아홉": 9}
+    hour_match = re.search(r"(\d{1,2}|한|두|세|네|다섯|여섯|일곱|여덟|아홉)시간", compact)
+    minute_match = re.search(r"(\d{1,3})분", compact)
+    if hour_match:
+        hour_text = hour_match.group(1)
+        hours = int(hour_text) if hour_text.isdigit() else korean_hours[hour_text]
+        minutes = int(minute_match.group(1)) if minute_match else (30 if "시간반" in compact else 0)
+        duration_minutes = hours * 60 + minutes
+    elif minute_match:
+        duration_minutes = int(minute_match.group(1))
+    else:
         return {"missing": True}
-    return {"amount_ml": int(amount_match.group(1)), "feeding_type": feeding_type}
+
+    if not 1 <= duration_minutes <= 720:
+        return {"missing": True}
+    return {"duration_minutes": duration_minutes}
 
 
-async def _handle_care_request(request) -> dict | None:
+async def _handle_care_request(request, baby: Baby) -> dict | None:
     """Run deterministic care-record scenarios before the RAG category path."""
     message = request.message.strip()
     if message in {"안녕", "안녕하세요", "반가워", "반갑습니다"}:
@@ -202,18 +269,52 @@ async def _handle_care_request(request) -> dict | None:
     record = _feeding_record(message)
     if record is not None:
         if record.get("missing"):
-            return _text_response("수유 기록에는 수유 방식과 양이 필요해요. 예: ‘방금 분유 100ml 먹었어’라고 입력해 주세요.", response_type="clarification_required")
+            return _text_response("수유 기록에는 수유량이 필요해요. 예: ‘방금 수유 100ml 했어’라고 입력해 주세요.", response_type="clarification_required")
+        feeding_type = record["feeding_type"] or baby.feeding_type
+        if feeding_type not in {"breast", "formula", "mixed"}:
+            return _text_response("아기의 수유 방식을 확인할 수 없어요. 모유 또는 분유를 함께 입력해 주세요.", response_type="clarification_required")
         result = await record_care_event({
             "baby_id": request.baby_id,
             "event_type": "feeding",
             "input_source": "text",
-            "feeding_type": record["feeding_type"],
+            "feeding_type": feeding_type,
             "amount_ml": record["amount_ml"],
             "idempotency_key": f"chat-{request.session_id}-{uuid4()}",
         })
         if not result.get("success"):
             raise RuntimeError(result.get("message", "수유 기록을 저장하지 못했습니다."))
         return _text_response(result.get("message", f"수유 {record['amount_ml']}ml를 기록했습니다."), response_type="record_confirmation")
+
+    diaper = _diaper_record(message)
+    if diaper is not None:
+        result = await record_care_event({
+            "baby_id": request.baby_id,
+            "event_type": "diaper",
+            "input_source": "text",
+            **diaper,
+            "idempotency_key": f"chat-{request.session_id}-{uuid4()}",
+        })
+        if not result.get("success"):
+            raise RuntimeError(result.get("message", "기저귀 기록을 저장하지 못했습니다."))
+        diaper_kind = "소변·대변" if diaper["urine"] and diaper["stool"] else "소변" if diaper["urine"] else "대변"
+        return _text_response(result.get("message", f"기저귀 {diaper_kind} 기록을 저장했습니다."), response_type="record_confirmation")
+
+    sleep = _sleep_record(message)
+    if sleep is not None:
+        if sleep.get("missing"):
+            return _text_response("수면 기록에는 시간이 필요해요. 예: ‘낮잠 1시간 30분 잤어’라고 입력해 주세요.", response_type="clarification_required")
+        result = await record_care_event({
+            "baby_id": request.baby_id,
+            "event_type": "sleep",
+            "input_source": "text",
+            "duration_minutes": sleep["duration_minutes"],
+            "idempotency_key": f"chat-{request.session_id}-{uuid4()}",
+        })
+        if not result.get("success"):
+            raise RuntimeError(result.get("message", "수면 기록을 저장하지 못했습니다."))
+        hours, minutes = divmod(sleep["duration_minutes"], 60)
+        duration_label = f"{hours}시간" + (f" {minutes}분" if minutes else "")
+        return _text_response(result.get("message", f"수면 {duration_label}을 기록했습니다."), response_type="record_confirmation")
     return None
 
 
@@ -267,7 +368,7 @@ async def answer_chat(request, app) -> dict:
     baby = await _validate_context(request, app)
     memories = await get_relevant_memories(app.state.db_engine, request.user_id, request.message)
     recent_messages = await get_recent_conversation(app.state.redis, request.user_id, request.session_id)
-    care_response = await _handle_care_request(request)
+    care_response = await _handle_care_request(request, baby)
     if care_response is not None:
         await write_chat_trace(app.state.redis, user_id=request.user_id, session_id=request.session_id, baby_id=request.baby_id, request_id=request_id, tool_used=True, memory_count=len(memories), memory_created=False)
         return {"success": True, "message": "요청을 처리했습니다.", "request_id": request_id, "data": care_response}
