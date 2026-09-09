@@ -21,7 +21,7 @@ def _display_care_records(result: dict) -> list[dict]:
         "diaper": ("💩", "기저귀"),
         "growth": ("📏", "성장 측정"),
     }
-    feeding_labels = {"formula": "분유", "breast": "모유", "mixed": "혼합 수유"}
+    feeding_labels = {"formula": "분유", "breast": "모유", "mixed": "혼합"}
     cards = []
     for record in raw_records:
         event_type = record.get("event_type", "")
@@ -415,12 +415,14 @@ def render() -> None:
     st.markdown("<style>.filter{display:none!important}</style>", unsafe_allow_html=True)
     st.markdown("<style>.edit-record,.cardx{display:none!important}</style>", unsafe_allow_html=True)
     metrics_placeholder = st.empty()
-    st.markdown("<style>.st-key-recent_records_controls{gap:10px!important}.st-key-recent_records_controls [data-testid='stVerticalBlock']{gap:0!important}.st-key-recent_records_controls [data-testid='stHorizontalBlock']{border:1px solid #E3E7F1;border-radius:12px;padding:8px 12px;margin:0!important;align-items:center}.st-key-recent_records_controls [data-testid='stHorizontalBlock'] button{min-height:36px;padding:0 .55rem}.recent-record-title{display:inline-block;width:13rem;font-size:.9rem}.recent-record-detail{color:#778198;font-size:.82rem;margin-left:0}@media(max-width:700px){.st-key-recent_records_controls{gap:10px!important}.st-key-recent_records_controls [data-testid='stVerticalBlock']{gap:0!important}.st-key-recent_records_controls [data-testid='stHorizontalBlock']{flex-wrap:nowrap!important;gap:.35rem!important;padding:10px!important}.st-key-recent_records_controls [data-testid='stHorizontalBlock']>[data-testid='stColumn']{min-width:0!important}.st-key-recent_records_controls [data-testid='stHorizontalBlock']>[data-testid='stColumn']:first-child{flex:0 0 94px!important;width:94px!important}.st-key-recent_records_controls [data-testid='stHorizontalBlock']>[data-testid='stColumn']:nth-child(2){flex:1 1 auto!important;width:auto!important}.st-key-recent_records_controls [data-testid='stHorizontalBlock']>[data-testid='stColumn']:nth-child(3),.st-key-recent_records_controls [data-testid='stHorizontalBlock']>[data-testid='stColumn']:nth-child(4){flex:0 0 38px!important;width:38px!important}.st-key-recent_records_controls [data-testid='stHorizontalBlock'] button{min-height:32px!important;min-width:32px!important;padding:0!important}.recent-record-title{display:block;width:auto}.recent-record-detail{display:block;margin:.2rem 0 0!important}}</style>", unsafe_allow_html=True)
+    st.markdown("<style>.st-key-recent_records_controls{gap:10px!important}.st-key-recent_records_controls [data-testid='stVerticalBlock']{gap:0!important}.st-key-recent_records_controls [data-testid='stHorizontalBlock']{border:1px solid #E3E7F1;border-radius:12px;padding:8px 12px;margin:0!important;align-items:center}.st-key-recent_records_controls [data-testid='stHorizontalBlock'] button{min-height:36px;padding:0 .55rem}.recent-record-title{display:inline-block;width:13rem;font-size:.9rem}.recent-record-detail{color:#778198;font-size:.82rem;margin-left:0}@media(min-width:701px){.st-key-recent_records_controls [data-testid='stHorizontalBlock']>[data-testid='stColumn']:nth-child(3){flex:0 0 40px!important;width:40px!important}.st-key-recent_records_controls [data-testid='stHorizontalBlock']>[data-testid='stColumn']:nth-child(4){flex:0 0 58px!important;width:58px!important}.st-key-recent_records_controls [data-testid='stHorizontalBlock']>[data-testid='stColumn']:nth-child(4)>[data-testid='stVerticalBlock']{display:flex;flex-direction:column;align-items:flex-end;gap:0!important;width:100%}.st-key-recent_records_controls [data-testid='stHorizontalBlock']>[data-testid='stColumn']:nth-child(4) button{white-space:nowrap}}@media(max-width:700px){.st-key-recent_records_controls{gap:10px!important}.st-key-recent_records_controls [data-testid='stVerticalBlock']{gap:0!important}.st-key-recent_records_controls [data-testid='stHorizontalBlock']{flex-wrap:nowrap!important;gap:2px!important;padding:10px 4px 10px 10px!important}.st-key-recent_records_controls [data-testid='stHorizontalBlock']>[data-testid='stColumn']{min-width:0!important}.st-key-recent_records_controls [data-testid='stHorizontalBlock']>[data-testid='stColumn']:first-child{flex:0 0 94px!important;width:94px!important}.st-key-recent_records_controls [data-testid='stHorizontalBlock']>[data-testid='stColumn']:nth-child(2){flex:1 1 0!important;width:0!important}.st-key-recent_records_controls [data-testid='stHorizontalBlock']>[data-testid='stColumn']:nth-child(3),.st-key-recent_records_controls [data-testid='stHorizontalBlock']>[data-testid='stColumn']:nth-child(4){flex:0 0 38px!important;width:38px!important}.st-key-recent_records_controls [data-testid='stHorizontalBlock'] button{min-height:32px!important;min-width:32px!important;padding:0!important}.recent-record-title{display:block;width:auto}.recent-record-detail{display:block;margin:.2rem 0 0!important}}</style>", unsafe_allow_html=True)
     st.session_state.setdefault("delete_care_record_id", None)
     with st.container(key="recent_records_controls", border=True):
         st.markdown("<div class='section-title'>최근 기록</div>", unsafe_allow_html=True)
         for index, record in enumerate(records):
-            time_column, content_column, edit_column, delete_column = st.columns([1.05, 4.2, 0.35, 0.35])
+            log_id = record.get("log_id")
+            delete_pending = bool(log_id and st.session_state.delete_care_record_id == log_id)
+            time_column, content_column, edit_column, delete_column = st.columns([1.05, 4.0, 0.35, 1.15 if delete_pending else 0.35])
             time_column.caption(record["time"])
             content_column.markdown(
                 f"<b class='recent-record-title'>{escape(record['icon'])}　{escape(record['title'])}</b><span class='recent-record-detail'>{escape(record['detail'])}</span>",
@@ -431,9 +433,8 @@ def render() -> None:
                 st.session_state.editing_record_type = record.get("event_type")
                 st.session_state.quick_edit_mode = False
                 st.rerun()
-            log_id = record.get("log_id")
-            if log_id and st.session_state.delete_care_record_id == log_id:
-                if delete_column.button("삭제 확인", key=f"confirm_delete_record_{index}", type="primary"):
+            if delete_pending:
+                if delete_column.button("삭제", key=f"confirm_delete_record_{index}", type="primary"):
                     result = api.delete_care_log(
                         log_id,
                         user_id=st.session_state.user_id,

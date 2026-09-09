@@ -2,9 +2,10 @@
 
 import json
 import re
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ValidationError
@@ -49,6 +50,34 @@ intent는 guidance, urgent_safety, out_of_scope 중 하나로 category와 일치
 
 def _text_response(answer: str, *, response_type: str = "text") -> dict:
     return {"response_type": response_type, "answer": answer, "sources": []}
+
+
+def _reflect_chat_result(chat: dict) -> tuple[str, str]:
+    """Validate only observable response facts before returning them to the user."""
+    if not isinstance(chat.get("answer"), str) or not chat["answer"].strip():
+        raise RuntimeError("최종 응답이 비어 있습니다.")
+    sources = chat.get("sources", [])
+    if not isinstance(sources, list):
+        raise RuntimeError("출처 응답 형식이 올바르지 않습니다.")
+    if chat.get("confidence") == "high" and not sources:
+        chat["confidence"] = "low"
+        chat["safety_notice"] = "근거 출처를 확인하지 못해 일반 안내로 제공했습니다."
+        return "downgraded_missing_sources", "safe_fallback"
+    return "passed", "none"
+
+
+def _format_recorded_at_kst(recorded_at: object) -> str:
+    """Format an API timestamp for caregivers in the app's Korea timezone."""
+    if not isinstance(recorded_at, str) or not recorded_at:
+        return "확인 필요"
+    try:
+        parsed = datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        local_time = parsed.astimezone(ZoneInfo("Asia/Seoul"))
+        return f"{local_time.year}년 {local_time.month}월 {local_time.day}일 {local_time.hour}시 {local_time.minute:02d}분"
+    except ValueError:
+        return "확인 필요"
 
 
 CITY_ALIASES = {
@@ -123,6 +152,19 @@ GENERAL_BABY_GUIDANCE_PROMPT = """당신은 한국어 육아 도우미입니다.
 확인 질문을 덧붙이세요. 호흡 곤란, 청색증, 의식 저하, 탈수, 반복 구토, 고열 등
 위험 신호가 의심되면 일반 안내보다 즉시 의료기관 또는 119 도움을 우선하라고 안내하세요."""
 
+ALLERGY_AI_KEYWORDS = (
+    "알레르기", "알러지", "땅콩", "두드러기", "먹고 토", "먹은 후 토", "먹은 뒤 토",
+    "입술 부", "혀 부", "쌕쌕",
+)
+
+ALLERGY_GUIDANCE_PROMPT = """당신은 한국어 육아 도우미입니다. 등록된 알레르기 정보와
+월령을 참고하여 음식 알레르기 관련 일반 안내를 짧고 실용적으로 제공하세요. 질병을
+진단하거나, 새로운 식품 섭취를 허용하거나, 약물 용량·처방·응급약 사용법을 지시하지
+마세요. 음식 회피, 식품 라벨 확인, 교차 접촉 주의처럼 일반적인 예방 안내만 하세요.
+호흡이 힘듦, 입술·혀의 심한 부종, 반복 구토, 청색증, 의식 저하처럼 위험 신호가 있으면
+답변 첫머리에서 즉시 119 또는 의료기관과 보호자가 받은 알레르기 행동계획을 따르도록
+안내하세요. 정보가 부족하면 증상, 섭취 시점, 동반 증상을 1~2개만 확인하세요."""
+
 
 def _memory_instruction(memories: list) -> str:
     preferences = [memory.content for memory in memories if getattr(memory, "memory_type", "") == "preference"]
@@ -155,17 +197,53 @@ async def generate_general_baby_guidance(message: str, memories: list | None = N
         return fallback
 
 
-def _extract_amount_ml(message: str) -> int | None:
-    """Read a numeric or Korean-number amount immediately before ml units."""
-    match = re.search(
-        r"(\d{1,3}|[일이삼사오육칠팔구영공십백]+)\s*(?:ml|밀리(?:리터)?)",
-        message,
-        re.IGNORECASE,
-    )
-    if match is None:
-        return None
+def _is_allergy_ai_request(message: str) -> bool:
+    """Route allergy-related questions away from unsupported RAG categories."""
+    compact = re.sub(r"\s+", "", message)
+    return any(keyword.replace(" ", "") in compact for keyword in ALLERGY_AI_KEYWORDS)
 
-    value = match.group(1)
+
+async def generate_allergy_guidance(
+    message: str,
+    baby: Baby,
+    memories: list | None = None,
+    recent_messages: list[dict] | None = None,
+) -> str:
+    """Generate guarded AI-only allergy guidance when no allergy RAG is available."""
+    allergies = ", ".join(baby.allergies) if baby.allergies else "등록된 알레르기 없음"
+    age_days = max(0, (date.today() - baby.birth_date).days)
+    profile_context = (
+        f"아기 이름: {baby.baby_name}\n"
+        f"월령: 생후 {age_days}일\n"
+        f"등록된 알레르기: {allergies}\n"
+        f"수유 방식: {baby.feeding_type}"
+    )
+    fallback = (
+        f"{baby.baby_name}의 등록된 알레르기 정보({allergies})를 반영한 AI 일반 안내예요. "
+        "원인 식품은 피하고 식품 라벨과 교차 접촉 가능성을 확인해 주세요. "
+        "호흡이 힘들어 보이거나 입술·혀가 심하게 붓고, 반복해서 토하거나 축 처지면 "
+        "즉시 119 또는 의료기관에 연락하고 보호자가 받은 알레르기 행동계획을 따라 주세요."
+    )
+    if not OPENAI_API_KEY:
+        return fallback
+    try:
+        response = await AsyncOpenAI(api_key=OPENAI_API_KEY).chat.completions.create(
+            model=OPENAI_MODEL,
+            temperature=0.2,
+            messages=[
+                {"role": "system", "content": ALLERGY_GUIDANCE_PROMPT + _memory_instruction(memories or []) + "\n\n아기 정보:\n" + profile_context},
+                *(recent_messages or [])[-4:],
+                {"role": "user", "content": message},
+            ],
+        )
+        answer = response.choices[0].message.content.strip()
+        return answer or fallback
+    except Exception:
+        return fallback
+
+
+def _parse_amount_ml(value: str) -> int | None:
+    """Validate one Arabic or Korean-numeral millilitre value."""
     if value.isdigit():
         amount = int(value)
     else:
@@ -186,16 +264,68 @@ def _extract_amount_ml(message: str) -> int | None:
     return amount if 0 < amount <= 500 else None
 
 
-def _feeding_record(message: str) -> dict | None:
-    """Parse only explicit, bounded text feeding records; never guess an amount."""
-    is_feeding_action = any(word in message for word in ("먹었", "마셨", "수유했", "기록해", "기록해줘"))
-    is_spaced_feeding_action = "수유" in message and "했" in message
-    if not is_feeding_action and not is_spaced_feeding_action:
+def _extract_amounts_ml(message: str) -> list[int] | None:
+    """Read every explicitly stated ml value; a negative value invalidates the record."""
+    matches = list(re.finditer(
+        r"(?P<sign>[+-]?)(?P<value>\d{1,3}|[일이삼사오육칠팔구영공십백]+)\s*(?:ml|밀리(?:리터)?)",
+        message,
+        re.IGNORECASE,
+    ))
+    if not matches:
         return None
-    amount_ml = _extract_amount_ml(message)
-    if amount_ml is None:
+    amounts = []
+    for match in matches:
+        # Do not silently discard a typed minus sign (for example, ``-100ml``)
+        # and turn it into a valid 100ml feeding record.
+        if match.group("sign") == "-":
+            return None
+        amount = _parse_amount_ml(match.group("value"))
+        if amount is None:
+            return None
+        amounts.append(amount)
+    return amounts
+
+
+def _extract_amount_ml(message: str) -> int | None:
+    """Read the first numeric or Korean-number amount immediately before ml units."""
+    amounts = _extract_amounts_ml(message)
+    return amounts[0] if amounts else None
+
+
+def _relative_recorded_at(message: str, *, now: datetime | None = None) -> str | None:
+    """Convert explicit Korean relative times such as ``30분 전에`` into UTC timestamps."""
+    now = now or datetime.now(timezone.utc)
+    compact = message.replace(" ", "")
+    match = re.search(r"(?:(\d{1,2})시간)?(?:(\d{1,3})분)?전(?:에)?", compact)
+    if match is None:
+        return None
+    hours = int(match.group(1) or 0)
+    minutes = int(match.group(2) or 0)
+    elapsed_minutes = hours * 60 + minutes
+    if not 1 <= elapsed_minutes <= 24 * 60:
+        return None
+    return (now - timedelta(minutes=elapsed_minutes)).isoformat()
+
+
+def _feeding_record(message: str) -> dict | None:
+    """Parse bounded text feeding records without restricting amounts to UI presets."""
+    is_feeding_action = any(word in message for word in ("먹었", "먹였", "먹여", "마셨", "수유했", "줬", "주었", "기록해", "기록해줘"))
+    is_spaced_feeding_action = "수유" in message and "했" in message
+    # The reminder UI lets a caregiver reply with only an amount (for example
+    # ``165ml``).  Treat that unambiguous, standalone input as a feeding record
+    # too, while leaving questions such as "165ml 먹어도 돼?" as guidance.
+    is_amount_only = re.fullmatch(r"\s*[-+]?(?:\d{1,3}|[일이삼사오육칠팔구영공십백]+)\s*(?:ml|밀리(?:리터)?)\s*", message, re.IGNORECASE)
+    if not is_feeding_action and not is_spaced_feeding_action and not is_amount_only:
+        return None
+    amounts = _extract_amounts_ml(message)
+    if amounts is None:
         return {"missing": True}
-    feeding_type = "breast" if "모유" in message else "formula" if "분유" in message else None
+    # “30ml 수유하고 50ml를 추가로 더 수유했어” describes one feeding
+    # session. Store its total, instead of losing the follow-up amount.
+    amount_ml = sum(amounts) if len(amounts) > 1 and any(word in message for word in ("추가", "더")) else amounts[0]
+    if not 1 <= amount_ml <= 500:
+        return {"missing": True}
+    feeding_type = "mixed" if "혼합" in message or ("모유" in message and "분유" in message) else "breast" if "모유" in message else "formula" if "분유" in message else None
     return {"amount_ml": amount_ml, "feeding_type": feeding_type}
 
 
@@ -235,11 +365,59 @@ def _sleep_record(message: str) -> dict | None:
     return {"duration_minutes": duration_minutes}
 
 
+def _today_summary_request(message: str) -> str | None:
+    """Return the requested today-summary type, without mistaking it for a new record."""
+    compact = message.replace(" ", "")
+    asks_for_value = any(phrase in compact for phrase in (
+        "몇번", "몇회", "총몇", "얼마나", "알려줘", "알려", "보여줘", "보여", "조회", "상태", "어때",
+    ))
+    if "오늘" not in compact or not asks_for_value:
+        return None
+    if "수유" in compact:
+        return "feeding"
+    if any(word in compact for word in ("수면", "낮잠", "잠")):
+        return "sleep"
+    if any(word in compact for word in ("소변", "대변", "똥", "응가", "배변", "오줌")):
+        return "diaper"
+    return None
+
+
+def _duration_label(total_minutes: int) -> str:
+    hours, minutes = divmod(total_minutes, 60)
+    if hours and minutes:
+        return f"{hours}시간 {minutes}분"
+    if hours:
+        return f"{hours}시간"
+    return f"{minutes}분"
+
+
 async def _handle_care_request(request, baby: Baby) -> dict | None:
     """Run deterministic care-record scenarios before the RAG category path."""
     message = request.message.strip()
+    recorded_at = _relative_recorded_at(message)
     if message in {"안녕", "안녕하세요", "반가워", "반갑습니다"}:
         return _text_response("안녕하세요. 수유 기록, 최근 기록 조회, 육아 정보, 기저귀 사진, 병원 검색을 도와드릴게요.")
+
+    today_summary = _today_summary_request(message)
+    if today_summary is not None:
+        result = await get_care_records({"baby_id": request.baby_id, "query_type": "today"})
+        if not result.get("success"):
+            raise RuntimeError(result.get("message", "오늘 육아 기록을 조회하지 못했습니다."))
+        records = (result.get("data") or {}).get("records") or []
+        if today_summary == "feeding":
+            count = sum(record.get("event_type") == "feeding" for record in records)
+            return _text_response(f"오늘 수유는 총 {count}회 기록됐어요.")
+        if today_summary == "diaper":
+            diaper_records = [record.get("details") or {} for record in records if record.get("event_type") == "diaper"]
+            urine_count = sum(details.get("urine") is True for details in diaper_records)
+            stool_count = sum(details.get("stool") is True for details in diaper_records)
+            return _text_response(f"오늘 소변은 {urine_count}회, 대변은 {stool_count}회 기록됐어요.")
+        total_minutes = sum(
+            int((record.get("details") or {}).get("duration_minutes") or 0)
+            for record in records
+            if record.get("event_type") == "sleep"
+        )
+        return _text_response(f"오늘 수면은 총 {_duration_label(total_minutes)} 기록됐어요.")
 
     if "최근 수유" in message and any(word in message for word in ("기록", "알려", "보여", "조회")):
         result = await get_care_records({"baby_id": request.baby_id, "query_type": "latest_feeding"})
@@ -250,7 +428,8 @@ async def _handle_care_request(request, baby: Baby) -> dict | None:
             return _text_response("아직 저장된 수유 기록이 없어요. 예: ‘방금 분유 100ml 먹었어’라고 입력해 주세요.")
         details = latest.get("details", {})
         amount = details.get("amount_ml", "확인 필요")
-        return _text_response(f"최근 수유 기록은 {amount}ml이며, 기록 시각은 {latest.get('recorded_at', '확인 필요')}입니다.")
+        recorded_at = _format_recorded_at_kst(latest.get("recorded_at"))
+        return _text_response(f"최근 수유 기록은 {amount}ml이며, 기록 시각은 {recorded_at}입니다.")
 
     if "수유 패턴" in message or ("수유" in message and "패턴" in message):
         result = await get_care_records({"baby_id": request.baby_id, "query_type": "pattern", "days": 7})
@@ -269,7 +448,7 @@ async def _handle_care_request(request, baby: Baby) -> dict | None:
     record = _feeding_record(message)
     if record is not None:
         if record.get("missing"):
-            return _text_response("수유 기록에는 수유량이 필요해요. 예: ‘방금 수유 100ml 했어’라고 입력해 주세요.", response_type="clarification_required")
+            return _text_response("수유 기록이 잘못 입력되었어요. 다시 입력해주세요.", response_type="clarification_required")
         feeding_type = record["feeding_type"] or baby.feeding_type
         if feeding_type not in {"breast", "formula", "mixed"}:
             return _text_response("아기의 수유 방식을 확인할 수 없어요. 모유 또는 분유를 함께 입력해 주세요.", response_type="clarification_required")
@@ -280,6 +459,7 @@ async def _handle_care_request(request, baby: Baby) -> dict | None:
             "feeding_type": feeding_type,
             "amount_ml": record["amount_ml"],
             "idempotency_key": f"chat-{request.session_id}-{uuid4()}",
+            **({"recorded_at": recorded_at} if recorded_at else {}),
         })
         if not result.get("success"):
             raise RuntimeError(result.get("message", "수유 기록을 저장하지 못했습니다."))
@@ -293,6 +473,7 @@ async def _handle_care_request(request, baby: Baby) -> dict | None:
             "input_source": "text",
             **diaper,
             "idempotency_key": f"chat-{request.session_id}-{uuid4()}",
+            **({"recorded_at": recorded_at} if recorded_at else {}),
         })
         if not result.get("success"):
             raise RuntimeError(result.get("message", "기저귀 기록을 저장하지 못했습니다."))
@@ -309,6 +490,7 @@ async def _handle_care_request(request, baby: Baby) -> dict | None:
             "input_source": "text",
             "duration_minutes": sleep["duration_minutes"],
             "idempotency_key": f"chat-{request.session_id}-{uuid4()}",
+            **({"recorded_at": recorded_at} if recorded_at else {}),
         })
         if not result.get("success"):
             raise RuntimeError(result.get("message", "수면 기록을 저장하지 못했습니다."))
@@ -368,13 +550,33 @@ async def answer_chat(request, app) -> dict:
     baby = await _validate_context(request, app)
     memories = await get_relevant_memories(app.state.db_engine, request.user_id, request.message)
     recent_messages = await get_recent_conversation(app.state.redis, request.user_id, request.session_id)
+    if _is_allergy_ai_request(request.message):
+        chat = {
+            "response_type": "text",
+            "answer": "AI 일반 안내 · 등록된 알레르기 정보를 반영했어요.\n\n" + await generate_allergy_guidance(request.message, baby, memories, recent_messages),
+            "sources": [],
+            "confidence": "low",
+            "safety_notice": "일반 안내이며 진단·처방을 대신하지 않습니다. 위험 증상은 즉시 119 또는 의료기관에 문의하세요.",
+        }
+        await app.state.redis.rpush(f"chat:{request.user_id}:{request.session_id}", json.dumps({"role": "user", "content": request.message}, ensure_ascii=False), json.dumps({"role": "assistant", "content": chat["answer"]}, ensure_ascii=False))
+        await app.state.redis.ltrim(f"chat:{request.user_id}:{request.session_id}", -8, -1)
+        await app.state.redis.expire(f"chat:{request.user_id}:{request.session_id}", 86400)
+        created = await save_memory_candidate(app.state.db_engine, request.user_id, request.message)
+        await write_chat_trace(app.state.redis, user_id=request.user_id, session_id=request.session_id, baby_id=request.baby_id, request_id=request_id, tool_used=False, memory_count=len(memories), memory_created=created)
+        return {"success": True, "message": "알레르기 AI 안내를 생성했습니다.", "request_id": request_id, "data": chat}
     care_response = await _handle_care_request(request, baby)
     if care_response is not None:
         await write_chat_trace(app.state.redis, user_id=request.user_id, session_id=request.session_id, baby_id=request.baby_id, request_id=request_id, tool_used=True, memory_count=len(memories), memory_created=False)
         return {"success": True, "message": "요청을 처리했습니다.", "request_id": request_id, "data": care_response}
     hospital_response = await _handle_hospital_request(request.message)
     if hospital_response is not None:
-        await write_chat_trace(app.state.redis, user_id=request.user_id, session_id=request.session_id, baby_id=request.baby_id, request_id=request_id, tool_used=True, memory_count=len(memories), memory_created=False)
+        tool_name = "search_emergency_hospitals" if _hospital_type_for_request(request.message) == "emergency" else "search_pediatric_hospitals"
+        await write_chat_trace(
+            app.state.redis, user_id=request.user_id, session_id=request.session_id, baby_id=request.baby_id,
+            request_id=request_id, tool_used=True, memory_count=len(memories), memory_created=False,
+            selected_tools=[tool_name], tool_arguments=[{"region": _extract_hospital_region(request.message)}],
+            result_validation="passed", reflection_action="none",
+        )
         return {"success": True, "message": "병원 검색 결과를 조회했습니다.", "request_id": request_id, "data": hospital_response}
     category = await classify_category(request.message)
     if category is None:
@@ -403,9 +605,17 @@ async def answer_chat(request, app) -> dict:
             "confidence": result.get("confidence"),
             "safety_notice": result.get("safety_notice") or ("일반 육아 안내이며 진단을 대신하지 않습니다." if no_evidence else None),
         }
+    result_validation, reflection_action = _reflect_chat_result(chat)
     await app.state.redis.rpush(f"chat:{request.user_id}:{request.session_id}", json.dumps({"role": "user", "content": request.message}, ensure_ascii=False), json.dumps({"role": "assistant", "content": chat["answer"]}, ensure_ascii=False))
     await app.state.redis.ltrim(f"chat:{request.user_id}:{request.session_id}", -8, -1)
     await app.state.redis.expire(f"chat:{request.user_id}:{request.session_id}", 86400)
     created = await save_memory_candidate(app.state.db_engine, request.user_id, request.message)
-    await write_chat_trace(app.state.redis, user_id=request.user_id, session_id=request.session_id, baby_id=request.baby_id, request_id=request_id, tool_used=True, memory_count=len(memories), memory_created=created)
+    selected_tools = [] if category == "general_baby" else [f"search_{category}_guide"]
+    tool_arguments = [] if category == "general_baby" else [{"category": category, "top_k": 5}]
+    await write_chat_trace(
+        app.state.redis, user_id=request.user_id, session_id=request.session_id, baby_id=request.baby_id,
+        request_id=request_id, tool_used=bool(selected_tools), memory_count=len(memories), memory_created=created,
+        selected_tools=selected_tools, tool_arguments=tool_arguments,
+        result_validation=result_validation, reflection_action=reflection_action,
+    )
     return {"success": True, "message": "AI 답변을 생성했습니다.", "request_id": request_id, "data": chat}

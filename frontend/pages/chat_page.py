@@ -450,13 +450,29 @@ def render() -> None:
                     if analysis.get("is_analyzable"):
                         observation = analysis.get("observation", {})
                         risk = analysis.get("risk", {})
-                        signals = ", ".join(risk.get("signals", [])) or "특별한 주의 신호 없음"
+                        level = risk.get("level", "none")
+                        risk_display = {
+                            "none": ("none", "✅", "특별한 위험 신호 없음"),
+                            "attention": ("attention", "⚠️", "추가 관찰이 필요해요"),
+                            "urgent": ("urgent", "🚨", "빠른 소아과 상담을 권장해요"),
+                            "emergency": ("emergency", "🆘", "즉시 119 또는 응급실 도움을 받으세요"),
+                        }
+                        risk_class, risk_icon, risk_title = risk_display.get(level, risk_display["attention"])
+                        signal_items = risk.get("signals", [])
+                        signals_html = "".join(f"<li>{escape(str(signal))}</li>" for signal in signal_items) or "<li>특별한 주의 신호 없음</li>"
                         st.markdown(
-                            "<div class='chat-ai'><b>🔎 AI 기저귀 사진 분석</b><br>"
-                            f"관찰: {observation.get('color', '확인 필요')} · {observation.get('consistency', '확인 필요')}<br>"
-                            f"주의 신호: {signals}<br>"
-                            f"{risk.get('recommended_action', '')}<br>"
-                            f"<span class='muted'>{analysis.get('safety_notice', '')}</span></div>",
+                            "<style>"
+                            ".diaper-risk-card{border:1px solid #DDE3F0;border-left:5px solid #6577DD;border-radius:12px;padding:14px 15px;margin:10px 0;background:#F8FAFF;color:#202737}"
+                            ".diaper-risk-card.none{background:#F0FBF5;border-color:#BFE6D0;border-left-color:#20A26B}.diaper-risk-card.attention{background:#FFF9E8;border-color:#F0D98C;border-left-color:#E5A62F}.diaper-risk-card.urgent{background:#FFF2E9;border-color:#F1BA90;border-left-color:#E76F31}.diaper-risk-card.emergency{background:#FFF0F1;border-color:#F0A8AF;border-left-color:#D8444F}"
+                            ".diaper-risk-title{font-size:16px;font-weight:800;margin-bottom:8px}.diaper-risk-observation{color:#536078;font-size:14px;margin-bottom:8px}.diaper-risk-signals{margin:6px 0 10px;padding-left:19px;font-size:14px}.diaper-risk-signals li{margin:3px 0}.diaper-risk-action{font-weight:700;border-radius:8px;padding:9px 10px;background:rgba(255,255,255,.7);font-size:14px}.diaper-risk-notice{display:block;color:#68758E;font-size:12px;margin-top:9px;line-height:1.45}"
+                            "</style>"
+                            f"<div class='diaper-risk-card {risk_class}'><div class='diaper-risk-title'>{risk_icon} {risk_title}</div>"
+                            "<b>🔎 AI 기저귀 사진 분석</b>"
+                            f"<div class='diaper-risk-observation'>관찰: {escape(str(observation.get('color', '확인 필요')))} · {escape(str(observation.get('consistency', '확인 필요')))}</div>"
+                            "<b>발견된 주의 신호</b>"
+                            f"<ul class='diaper-risk-signals'>{signals_html}</ul>"
+                            f"<div class='diaper-risk-action'>권장 행동 · {escape(str(risk.get('recommended_action', '추가 관찰이 필요해요.')))}</div>"
+                            f"<span class='diaper-risk-notice'>{escape(str(analysis.get('safety_notice', '')))}</span></div>",
                             unsafe_allow_html=True,
                         )
                     else:

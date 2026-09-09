@@ -65,6 +65,10 @@ def extract_feeding(transcript: str) -> dict | None:
     if any(word in lowered for word in ("안먹", "못먹", "하나도안먹", "수유안")):
         return None
     amount_ml = _extract_amount_ml(transcript)
+    # Do not create an incomplete voice snapshot.  Only an explicit amount in
+    # the supported 1..500ml range may proceed to the caregiver's approval.
+    if amount_ml is None:
+        return None
     if "분유" in transcript:
         return {"event_type": "feeding", "feeding_type": "formula", "amount_ml": amount_ml}
     if "모유" in transcript or "수유" in transcript:

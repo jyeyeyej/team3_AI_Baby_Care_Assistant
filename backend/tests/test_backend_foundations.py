@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from unittest.mock import AsyncMock
 
 import pytest
@@ -85,6 +85,116 @@ async def test_general_baby_questions_receive_safe_guidance(monkeypatch):
     answer = await agent_service.generate_general_baby_guidance("아기 목욕은 언제 시키면 좋아?")
     assert "월령" in answer
     assert "의료기관" in answer
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["땅콩 알레르기가 있으면 뭘 조심해야 해?", "먹고 토했어", "두드러기가 났어"],
+)
+def test_allergy_questions_use_the_ai_guidance_route(message):
+    assert agent_service._is_allergy_ai_request(message) is True
+
+
+def test_non_allergy_question_does_not_use_the_allergy_ai_guidance_route():
+    assert agent_service._is_allergy_ai_request("낮잠은 몇 시간 재우면 돼?") is False
+
+
+def test_chat_formats_utc_record_times_in_korea_time():
+    assert agent_service._format_recorded_at_kst("2026-09-09T01:38:39Z") == "2026년 9월 9일 10시 38분"
+
+
+@pytest.mark.parametrize("message", ["110ml", "130ml", "165ml", "분유 50ml 먹었어", "모유 60ml 먹었어", "분유 123ml 먹였어"])
+def test_chat_accepts_any_supported_feeding_amount(message):
+    record = agent_service._feeding_record(message)
+    assert record is not None
+    assert 1 <= record["amount_ml"] <= 500
+
+
+@pytest.mark.parametrize("message", ["0ml", "501ml", "-100ml", "-100ml 수유했어"])
+def test_chat_requests_clarification_for_out_of_range_feeding_amounts(message):
+    assert agent_service._feeding_record(message) == {"missing": True}
+
+
+def test_chat_does_not_treat_an_amount_question_as_a_feeding_record():
+    assert agent_service._feeding_record("165ml 먹어도 돼?") is None
+
+
+def test_chat_preserves_explicit_relative_record_time():
+    now = datetime(2026, 9, 9, 12, 0, tzinfo=timezone.utc)
+    assert agent_service._relative_recorded_at("30분전에 100ml 수유했어", now=now) == "2026-09-09T11:30:00+00:00"
+    assert agent_service._relative_recorded_at("1시간 5분 전에 100ml 수유했어", now=now) == "2026-09-09T10:55:00+00:00"
+
+
+def test_chat_identifies_breastmilk_and_formula_as_mixed_feeding():
+    record = agent_service._feeding_record("분유와 모유를 섞어서 120ml 줬어")
+    assert record == {"amount_ml": 120, "feeding_type": "mixed"}
+
+
+def test_chat_sums_explicit_additional_feeding_amounts():
+    record = agent_service._feeding_record("30ml를 수유하고 부족한 것 같아서 50ml를 추가로 더 수유했어")
+    assert record == {"amount_ml": 80, "feeding_type": None}
+
+
+@pytest.mark.asyncio
+async def test_chat_answers_today_feeding_count_before_attempting_to_record(monkeypatch):
+    get_records = AsyncMock(return_value={
+        "success": True,
+        "data": {"records": [{"event_type": "feeding"}, {"event_type": "feeding"}, {"event_type": "sleep"}]},
+    })
+    monkeypatch.setattr(agent_service, "get_care_records", get_records)
+
+    response = await agent_service._handle_care_request(
+        type("Request", (), {"message": "오늘 하루 수유 몇번했는지 알려줘", "baby_id": "baby-1"})(),
+        Baby(id="baby-1", user_id="user-1", baby_name="아기", birth_date=date.today(), gender="female", feeding_type="formula", allergies=[]),
+    )
+
+    assert response["answer"] == "오늘 수유는 총 2회 기록됐어요."
+    get_records.assert_awaited_once_with({"baby_id": "baby-1", "query_type": "today"})
+
+
+@pytest.mark.asyncio
+async def test_chat_answers_today_total_sleep_before_attempting_to_record(monkeypatch):
+    get_records = AsyncMock(return_value={
+        "success": True,
+        "data": {"records": [
+            {"event_type": "sleep", "details": {"duration_minutes": 90}},
+            {"event_type": "sleep", "details": {"duration_minutes": 45}},
+            {"event_type": "feeding", "details": {}},
+        ]},
+    })
+    monkeypatch.setattr(agent_service, "get_care_records", get_records)
+
+    response = await agent_service._handle_care_request(
+        type("Request", (), {"message": "오늘 수면을 총 몇시간 했는지 알려줘", "baby_id": "baby-1"})(),
+        Baby(id="baby-1", user_id="user-1", baby_name="아기", birth_date=date.today(), gender="female", feeding_type="formula", allergies=[]),
+    )
+
+    assert response["answer"] == "오늘 수면은 총 2시간 15분 기록됐어요."
+    get_records.assert_awaited_once_with({"baby_id": "baby-1", "query_type": "today"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    ["오늘 똥 몇번 쌌는지 알려줘", "오늘 소변과 똥 배변 상태 어때?"],
+)
+async def test_chat_answers_today_diaper_summary_before_attempting_to_record(monkeypatch, message):
+    get_records = AsyncMock(return_value={
+        "success": True,
+        "data": {"records": [
+            {"event_type": "diaper", "details": {"urine": True, "stool": True}},
+            {"event_type": "diaper", "details": {"urine": True, "stool": False}},
+        ]},
+    })
+    monkeypatch.setattr(agent_service, "get_care_records", get_records)
+
+    response = await agent_service._handle_care_request(
+        type("Request", (), {"message": message, "baby_id": "baby-1"})(),
+        Baby(id="baby-1", user_id="user-1", baby_name="아기", birth_date=date.today(), gender="female", feeding_type="formula", allergies=[]),
+    )
+
+    assert response["answer"] == "오늘 소변은 2회, 대변은 1회 기록됐어요."
+    get_records.assert_awaited_once_with({"baby_id": "baby-1", "query_type": "today"})
 
 
 @pytest.mark.asyncio
