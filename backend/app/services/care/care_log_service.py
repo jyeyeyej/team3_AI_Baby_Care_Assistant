@@ -145,18 +145,30 @@ async def get_care_summary(
 
     feedings = [row for row in rows if row.log_type == "feeding"]
     amounts = [float(row.details["amount_ml"]) for row in feedings if row.details.get("amount_ml") is not None]
+    previous_feeding = (
+        await session.execute(
+            select(CareLog)
+            .where(
+                CareLog.baby_id == baby_id,
+                CareLog.log_type == "feeding",
+                CareLog.recorded_at < start_at,
+            )
+            .order_by(CareLog.recorded_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    interval_feedings = ([previous_feeding] if previous_feeding is not None else []) + feedings
     intervals = [
         (current.recorded_at - previous.recorded_at).total_seconds() / 60
-        for previous, current in zip(feedings, feedings[1:])
+        for previous, current in zip(interval_feedings, interval_feedings[1:])
     ]
     local_timezone = ZoneInfo(APP_TIMEZONE)
     today = datetime.now(local_timezone).date()
     dates = [today - timedelta(days=offset) for offset in range(days - 1, -1, -1)]
     intervals_by_date: dict[date, list[float]] = {day: [] for day in dates}
-    for previous, current in zip(feedings, feedings[1:]):
-        previous_day = previous.recorded_at.astimezone(local_timezone).date()
+    for previous, current in zip(interval_feedings, interval_feedings[1:]):
         current_day = current.recorded_at.astimezone(local_timezone).date()
-        if previous_day == current_day and current_day in intervals_by_date:
+        if current_day in intervals_by_date:
             intervals_by_date[current_day].append(
                 (current.recorded_at - previous.recorded_at).total_seconds() / 60
             )

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -242,18 +242,25 @@ def get_dashboard(_: str) -> dict:
     }
 
 
-def get_care_records(baby_id: str, *, user_id: str | None = None, session_id: str | None = None) -> dict:
-    """Read saved care logs so the care page reflects alarm, text, and voice entries."""
+def get_care_records(baby_id: str, *, user_id: str | None = None, session_id: str | None = None, days: int = 1) -> dict:
+    """Read saved care logs from the requested recent-day range."""
     if not USE_MOCK_API:
         headers = {}
         if user_id:
             headers["X-User-Id"] = user_id
         if session_id:
             headers["X-Session-Id"] = session_id
+        end_date = date.today()
+        start_date = end_date - timedelta(days=days - 1)
         return request_backend(
             "GET",
             "/api/care-logs",
-            params={"baby_id": baby_id, "query_type": "today"},
+            params={
+                "baby_id": baby_id,
+                "query_type": "range",
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+            },
             headers=headers,
         )
     return {

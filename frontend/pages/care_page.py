@@ -86,6 +86,7 @@ def render() -> None:
         st.session_state.baby_id,
         user_id=st.session_state.user_id,
         session_id=st.session_state.session_id,
+        days=3,
     )
     # Keep the recent-record card compact even when many logs have accumulated.
     records = _display_care_records(records_result)[:6]
@@ -201,7 +202,7 @@ def render() -> None:
             <g fill='#6374DC'>{chart_circles}</g>
             <g fill='#778198' font-size='12'>{grid_labels}{weekday_labels}</g>
           </svg>
-          <div style='display:flex;gap:14px;color:#778198;font-size:12px'><span><b style='color:#6374DC'>●</b> 서아의 기록</span><span><b style='color:#F2A365'>●</b> 평균 수유 간격 ({average_interval_label})</span></div>
+          <div style='display:flex;gap:14px;color:#778198;font-size:12px'><span><b style='color:#6374DC'>●</b> {escape(baby['baby_name'])}의 기록</span><span><b style='color:#F2A365'>●</b> 평균 수유 간격 ({average_interval_label})</span></div>
           <div style='background:#EEF1FF;color:#68758E;padding:12px;border-radius:9px;font-size:13px;margin-top:16px'>💡 수유 간격과 수면 기록은 더 많은 기록이 쌓이면 정확하게 요약됩니다.</div>
         </div>
         """,unsafe_allow_html=True); return
@@ -209,7 +210,7 @@ def render() -> None:
         st.markdown(f"""
         <div style='background:#fff;border:1px solid #E3E7F1;border-radius:15px;padding:16px'>
           <div style='display:flex;justify-content:space-between;align-items:center'><h3 style='margin:0'>몸무게 변화</h3><span style='color:#6374DC;background:#EEF1FF;border-radius:8px;padding:7px 10px;font-size:13px'>몸무게</span></div>
-          <svg viewBox='0 0 620 270' role='img' aria-label='서아의 몸무게 성장 그래프' style='width:100%;height:auto;margin-top:12px'>
+          <svg viewBox='0 0 620 270' role='img' aria-label='{escape(baby['baby_name'])}의 몸무게 성장 그래프' style='width:100%;height:auto;margin-top:12px'>
             <rect x='55' y='34' width='535' height='156' rx='8' fill='#FFFFFF'/>
             <path d='M55 54H590 M55 102H590 M55 150H590 M55 190H590' stroke='#E3E7F1' stroke-dasharray='4 4'/>
             <path d='M65 128 L195 106 L325 80 L455 55 L585 34 L585 68 L455 86 L325 111 L195 137 L65 158Z' fill='#DDE3FF' opacity='.9'/>
@@ -218,9 +219,9 @@ def render() -> None:
             <g fill='#778198' font-size='12'><text x='15' y='58'>5kg</text><text x='15' y='106'>4kg</text><text x='15' y='154'>3kg</text><text x='55' y='220'>출생</text><text x='171' y='220'>1주</text><text x='301' y='220'>2주</text><text x='431' y='220'>3주</text><text x='560' y='220'>현재</text></g>
             <text x='545' y='{growth_label_y}' fill='#6374DC' font-size='12' font-weight='700'>{current_weight:.1f}kg</text>
           </svg>
-          <div style='display:flex;gap:14px;color:#778198;font-size:12px'><span><b style='color:#6374DC'>●</b> 서아</span><span><b style='color:#DDE3FF'>●</b> 같은 성별·월령 참고 범위</span></div>
+          <div style='display:flex;gap:14px;color:#778198;font-size:12px'><span><b style='color:#6374DC'>●</b> {escape(baby['baby_name'])}</span><span><b style='color:#DDE3FF'>●</b> 같은 성별·월령 참고 범위</span></div>
           <h3 style='margin:22px 0 10px'>최근 측정 결과</h3>
-          <div style='background:#EEF1FF;padding:12px;border-radius:9px'><b>현재 몸무게 {current_weight:.1f}kg</b><br><span style='color:#68758E;font-size:13px'>서아가 건강하게 성장하고 있어요. 지금처럼 꾸준히 성장 기록을 확인해 주세요.</span></div>
+          <div style='background:#EEF1FF;padding:12px;border-radius:9px'><b>현재 몸무게 {current_weight:.1f}kg</b><br><span style='color:#68758E;font-size:13px'>{escape(baby['baby_name'])}가 건강하게 성장하고 있어요. 지금처럼 꾸준히 성장 기록을 확인해 주세요.</span></div>
         </div>
         """,unsafe_allow_html=True); return
     if selected=="예방접종":

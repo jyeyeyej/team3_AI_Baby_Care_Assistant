@@ -13,7 +13,7 @@ def render() -> None:
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown("## 반가워요 👋")
         st.caption("AI 육아 도우미를 시작해 보세요.")
-        selected = st.selectbox("테스트 사용자", ["서아 보호자 김서아님", "민준 보호자 · 생후 6개월"])
+        selected = st.selectbox("테스트 사용자", ["서아 보호자 김서아님", "민준 보호자 한태경님"])
         if st.button("로그인", use_container_width=True, type="primary"):
             result = api.test_login(selected)
             if result["success"]:

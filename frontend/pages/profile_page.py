@@ -10,6 +10,8 @@ def render() -> None:
     if not st.session_state.profile_editing:
         st.session_state.profile_values = baby_data.copy()
     st.session_state.setdefault("guardian_values", {"name": "김서아", "relation": "엄마", "phone": "010-1234-5678", "email": "seoa.guardian@example.com"})
+    if st.session_state.user_id == "user-002" and st.session_state.guardian_values["name"] == "김서아":
+        st.session_state.guardian_values["name"] = "한태경"
     st.session_state.setdefault("guardian_editing", False)
     b=st.session_state.profile_values
     render_page_header("내 정보","보호자 정보와 AI 답변에 반영할 아기 정보를 관리해요.",b)

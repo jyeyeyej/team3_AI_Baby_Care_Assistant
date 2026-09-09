@@ -161,6 +161,9 @@ def apply_style() -> None:
         .record-detail { color:#6577A0; font-size:.76rem; }
         div[data-testid="stButton"] > button { background:#FFFFFF; border-radius: 9px; border-color: #DFE4F1; font-weight: 650; }
         div[data-testid="stButton"] > button[kind="primary"] { background:#6374DC; border-color:#6374DC; color:#FFFFFF; }
+        div[data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"] { background:#6374DC !important; border-color:#6374DC !important; color:#FFFFFF !important; }
+        div[data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"]:hover,
+        div[data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"]:focus-visible { background:#5667CE !important; border-color:#5667CE !important; }
         div[data-baseweb="input"] > div, div[data-baseweb="select"] > div { background:#F6F7FB; border-color:#DFE4F1; }
         .stTabs [data-baseweb="tab-list"] { gap:0; background:#EEF1FF; padding:.28rem; border-radius:11px; }
         .stTabs [data-baseweb="tab"] { flex:1; justify-content:center; border-radius:8px; height:39px;
