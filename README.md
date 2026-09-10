@@ -124,6 +124,21 @@ mcp_servers/
 documents/                # 기획서, API 계약서, 아키텍처 문서
 ```
 
+## 시스템 아키텍처
+```mermaid
+flowchart LR
+  F[Streamlit 프론트엔드] --> B[FastAPI 백엔드]
+  B --> DB[(PostgreSQL + pgvector)]
+  B --> R[(Redis)]
+  B --> M1[MCP 1<br/>육아 기록·기저귀 분석]
+  B --> M2[MCP 2<br/>병원 검색·RAG]
+  M1 --> DB
+  M2 --> DB
+  M2 --> O[Ollama 임베딩]
+  M2 --> A[공공데이터 API]
+  M2 --> AI[OpenAI API]
+```
+
 ## 실행 방법
 
 ### 1. 프론트엔드 실행
