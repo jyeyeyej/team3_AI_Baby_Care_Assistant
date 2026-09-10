@@ -27,6 +27,7 @@ class RecordCareEventInput(StrictBaseModel):
     amount_ml: int | None = Field(default=None, ge=0, le=500)
 
     action: SleepAction | None = None
+    duration_minutes: int | None = Field(default=None, ge=1, le=720)
 
     urine: bool | None = None
     stool: bool | None = None

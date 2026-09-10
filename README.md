@@ -1,3 +1,5 @@
+![AI Baby Care Assistant 배너](assets/ai-baby-care-banner.png)
+
 # AI Baby Care Assistant
 
 0~36개월 영유아 보호자를 위한 AI 기반 육아 관리·정보 지원 서비스입니다.

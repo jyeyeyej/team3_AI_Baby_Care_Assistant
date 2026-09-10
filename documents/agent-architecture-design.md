@@ -1,22 +1,25 @@
 ## `baby_care_agent` 서비스 ai 에이전트 계획서 
 
 ## 01. 프로젝트 개요
-AI Baby Care Assistant는 영유아를 돌보는 보호자가 육아 과정에서 겪는 불안과 정보 부족을 줄일 수 있도록 돕는 AI 기반 육아 지원 서비스입니다. 
 
-수유, 수면, 배변 등 매일 반복되는 육아 기록을 쉽고 체계적으로 관리하고, 기록을 바탕으로 아이의 생활 패턴과 주의가 필요한 변화를 직관적으로 확인할 수 있도록 설계합니다.
-보호자는 궁금한 상황을 자연어로 질문해 맞춤형 육아 정보를 얻고, 필요한 시점에는 병원 방문 또는 전문가 상담을 고려할 수 있는 안내를 받을 수 있습니다. 
-궁극적으로 이 서비스는 보호자가 아이의 상태를 더 잘 이해하고 일상적인 돌봄 의사결정을 내릴 수 있도록 돕는 신뢰할 수 있는 육아 동반자를 목표로 합니다.
+> 구현 정합성 안내: 이 문서는 현재 MVP 구현 범위와 향후 확장할 Agent 구조를 함께 설명합니다. 현재 MVP는 Backend의 정책 기반 `AgentLoop`으로 계획 → 허용 Tool 실행 → 결과 검증을 처리하며, 권한·승인·기록 저장은 Backend 정책이 통제합니다. Reflection은 필수값 누락 보완 질문, 병원 검색 1회 재시도·안전 종료, RAG 근거 부족 안전 폴백까지 구현했습니다. 전체 StateGraph 노드가 독립 Runtime으로 실행되거나 모델이 자유롭게 반복 Function Calling을 수행하는 구조는 확장 목표입니다.
 
-`baby_care_agent`는 0~36개월 영유아 보호자의 질문을 이해하고, 아기 정보·육아 기록·RAG·병원 검색 결과를 조합하여 답변하는 하나의 Single Agent입니다.
+AI Baby Care Assistant는 0~36개월 영유아를 돌보는 보호자를 위한 AI 육아 도우미 서비스입니다.
+
+보호자는 수유·수면·배변 등의 육아 기록을 관리하고, 아기 정보와 기록을 바탕으로 생활 패턴을 확인할 수 있습니다. 또한 AI에게 육아 관련 질문을 하고 필요한 정보나 병원 안내를 받을 수 있습니다.
+
+`baby_care_agent`는 보호자의 요청을 이해하고 아기 정보·육아 기록·RAG·병원 검색 등 
+필요한 기능을 활용해 답변하는 하나의 통합 Agent입니다.
+
 
 | 항목 | 내용 |
 |---|---|
-| AI Agent | OpenAI Responses API 기반 `baby_care_agent` |
-| Agent Runtime | 공통 순수 Python Agent Loop |
+| AI Agent | Backend 정책 기반 `AgentLoop`과 OpenAI Chat Completions 기반 의도 분류·일반 안내를 결합한 `baby_care_agent` |
+| Agent Runtime | 현재는 공통 Python `AgentLoop`이 계획 → 실행 → 검증을 수행하며, 전체 StateGraph Runtime은 확장 목표 |
 | Tool 연결 | Streamable HTTP MCP |
 | MCP Server | `baby_care_server`, `baby_info_server` |
 | Backend | FastAPI |
-| Frontend | Streamlit |
+| Frontend | Streamlit, 약간의 html/css |
 | 저장소 | PostgreSQL, Redis |
 | 외부 데이터 | RAG 문서, 병원 공공데이터 API |
 | 파일 처리 | 이미지·음성 임시 저장 후 삭제 |
@@ -28,8 +31,8 @@ AI Baby Care Assistant는 영유아를 돌보는 보호자가 육아 과정에�
 | `agent_id` | `baby_care` |
 | Agent 이름 | AI 육아 도우미 |
 | Goal | 아기 정보와 육아 기록을 반영해 기록·검색·관찰·의료기관 조회를 지원한다. |
-| 대표 요청 | `서아가 방금 분유 100ml를 먹었어. 기록해 줘.` |
-| 실행 방식 | OpenAI Responses API와 MCP Tool을 사용하는 Single Agent Loop |
+| 대표 요청 | `방금 분유 100ml를 먹었어.` |
+| 실행 방식 | 현재는 정책 기반 `AgentLoop`과 Allowlist MCP Tool 실행; 모델 주도 OpenAI Responses Function Calling Single Agent Loop는 확장 목표. RAG 최종 답변 생성은 `baby_info_server`의 Responses API가 담당 |
 | MCP 연결 | Streamable HTTP |
 | 기록 원칙 | 텍스트·UI 기록은 검증 후 저장하고, STT로 생성된 기록만 사용자 승인 후 저장한다. |
 
@@ -93,7 +96,7 @@ Tool 실행 여부는 Backend 승인 정책이 통제합니다.
 - STT로 변환된 보호자 음성 텍스트 처리
 - Tool Allowlist·위험도·입력 출처별 승인·중복 실행 방지
 - Agent State·Trace·최근 채팅의 Redis 저장
-- 대화 요약과 장기 Memory의 PostgreSQL `user_memories` 저장
+- 답변 스타일·길이·단위 선호 같은 안전한 장기 Memory의 PostgreSQL `user_memories` 저장
 - FastAPI SSE를 통한 사용자용 채팅 진행 상태 연동
 
 ## 04. 핵심 판단 흐름
@@ -164,7 +167,7 @@ OpenAI에 전달할 정보:
 Agent 시스템 메시지
 + 보호자가 입력한 사용자 메시지
 + PostgreSQL에서 조회한 아기 프로필과 알레르기
-+ PostgreSQL의 이전 대화 요약
++ PostgreSQL의 안전한 답변 선호 정보(존재하는 경우)
 + Redis의 현재 대화 문맥
 + RAG 검색 결과
 + MCP Tool 실행 결과
@@ -246,9 +249,9 @@ CHAT_RESPONSE_TYPES = [
 | N-10 | 지역명 입력 | `서울 동작구 소아과 찾아줘` | `search_pediatric_hospitals` | 병원 목록·주소·전화·확인 시점 반환 |
 | N-11 | 지역명 입력 | `서울 동작구 응급실 찾아줘` | `search_emergency_hospitals` | 응급실 목록과 위급 시 119 안내 |
 | N-12 | 정상 이미지 업로드 | 기저귀 변 사진 분석 요청 | `analyze_infant_stool` 자동 실행 | 관찰 결과·출처·안전 안내 반환, 임시 파일 삭제 |
-| N-13 | 음성이 텍스트로 변환됨 | `서아가 분유 100ml 먹었어` | 실제 육아 기록을 추출하고 STT 승인 Snapshot 생성 | 승인 후 Tool을 한 번 실행하고 Agent Loop 재개 없이 FastAPI가 저장 결과 반환 |
+| N-13 | 음성이 텍스트로 변환됨 | `서아가 분유 100ml 먹었어` | Backend 규칙 기반 추출로 실제 기록을 판별하고 STT 승인 Snapshot 생성 | 승인 후 Tool을 한 번 실행하고 Agent Loop 재개 없이 FastAPI가 저장 결과 반환 |
 | N-14 | RAG와 기록 모두 필요 | `최근 기록을 보면 수면은 괜찮아?` | 기록 조회 후 수면 RAG 호출 | 기록 요약과 일반 가이드를 구분해 답변 |
-| N-15 | 최근 채팅 8개 또는 요약 기준 도달 | 정상 대화 계속 | 최근 대화를 사실 중심으로 요약 | `user_memories(memory_type=conversation_summary)`에 요약 저장, Redis에는 최근 8개 유지 |
+| N-15 | 최근 채팅 8개 유지 | 정상 대화 계속 | Redis 최근 메시지를 8개로 제한 | 원문은 TTL 만료 후 삭제; 대화 요약 자동 저장은 확장 목표 |
 
 ## 09. 비정상·예외 케이스 시나리오
 
@@ -273,7 +276,7 @@ CHAT_RESPONSE_TYPES = [
 | E-17 | 변 사진에서 위험 신호 가능성 | 진단하지 않고 안전 규칙 적용 | O | 즉시 의료기관 확인 안내 |
 | E-18 | 최대 Agent 단계 초과 | Runtime이 반복 중단 | X | `max_steps_exceeded` |
 | E-19 | OpenAI 응답 오류 | Trace에 오류 요약 후 종료 | X | `model_error` |
-| E-20 | Redis 채팅 원문 TTL 임박 | 만료 전 요약 시도 | O | `user_memories(memory_type=conversation_summary)`에 요약 저장; 실패 시 Trace 기록 |
+| E-20 | Redis 채팅 원문 TTL 임박 | 현재는 TTL 만료로 원문 삭제 | O | 대화 요약 자동 저장은 확장 목표이며, 현재 영구 저장은 안전한 답변 선호 정보로 제한 |
 | E-21 | `아아아 1234 외계인 우유 뿅`처럼 의미를 이해할 수 없음 | 추측하지 않고 재입력 요청 | X | `UNRECOGNIZED_REQUEST`, 육아 질문 예시 안내 |
 | E-22 | `오늘 주식 종목 추천해 줘`처럼 육아와 무관함 | 범위 밖 요청으로 분류 | X | `OUT_OF_SCOPE`, 육아 지원 범위 안내 |
 | E-23 | 아기 영상·울음소리 분석 등 제외 기능 요청 | 구현하지 않은 기능으로 분류 | X | `UNSUPPORTED_FEATURE`, 가능한 기능 안내 |
@@ -552,7 +555,7 @@ Trace는 모델의 숨겨진 생각을 저장하는 것이 아니라 실제로 �
 
 | Redis Key | 저장 내용 | TTL |
 | --- | --- | --- |
-| `session:{user_id}:{session_id}` | Agent 상태·현재 단계 | 1일 Sliding TTL |
+| `session:{user_id}:{session_id}` | 테스트 로그인 세션·사용자/아기 식별 정보 | 1일 TTL |
 | `chat:{user_id}:{session_id}` | 최근 사용자·AI 메시지 최대 8개 | 1일 Sliding TTL |
 | `stt_approval:{user_id}:{session_id}:{tool_call_id}` | 승인 Snapshot·대기 State | 10분 |
 | `idempotency:{user_id}:{session_id}:{key}` | 처리 여부와 기존 결과 | 1일 |
@@ -589,19 +592,19 @@ await redis_client.set(
 )
 ```
 
-### 18.4 채팅 원문과 요약
+### 18.4 채팅 원문과 현재 저장 범위
 
 ```
 사용자 메시지 → Redis chat Key에 저장
 → AI 답변을 같은 Key에 추가
 → 최근 메시지는 최대 8개 유지
-→ 대화 길이·세션 종료 등 요약 기준에 도달하면 사실 중심 요약 생성
-→ PostgreSQL user_memories에 memory_type="conversation_summary"로 저장
+→ 현재는 최근 8개만 유지하고 TTL 만료 시 원문 삭제
+→ 안전한 답변 선호 정보만 PostgreSQL user_memories에 memory_type="preference"로 저장
 → Redis에는 최근 메시지만 유지하고 새 대화마다 TTL을 1일로 갱신
 → 원문은 TTL 만료 후 삭제
 ```
 
-과거 채팅 원문 조회·검색 기능은 구현하지 않습니다. 영구 저장 대상은 대화 전체가 아니라 다음 대화에 필요한 요약입니다.
+과거 채팅 원문 조회·검색 기능은 구현하지 않습니다. 현재 영구 저장 대상은 대화 요약이 아니라 재사용 가능한 안전한 답변 선호 정보입니다. 대화 요약 자동 저장은 확장 목표입니다.
 
 ### 18.5 저장하지 않는 정보
 

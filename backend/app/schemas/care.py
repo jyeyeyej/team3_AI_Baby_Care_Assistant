@@ -20,6 +20,7 @@ class CareLogCreateRequest(BaseModel):
     amount_ml: int | None = Field(default=None, ge=0, le=500)
 
     action: Literal["start", "end"] | None = None
+    duration_minutes: int | None = Field(default=None, ge=1, le=720)
 
     urine: bool = False
     stool: bool = False
@@ -37,8 +38,8 @@ class CareLogCreateRequest(BaseModel):
         if self.event_type == "feeding" and self.feeding_type is None:
             raise ValueError("수유 기록에는 수유 방식을 입력해 주세요.")
 
-        if self.event_type == "sleep" and self.action is None:
-            raise ValueError("수면 기록에는 시작 또는 종료를 입력해 주세요.")
+        if self.event_type == "sleep" and self.action is None and self.duration_minutes is None:
+            raise ValueError("수면 기록에는 시간 또는 시작·종료를 입력해 주세요.")
 
         if self.event_type == "diaper" and not self.urine and not self.stool:
             raise ValueError("기저귀 기록에는 소변 또는 대변을 선택해 주세요.")
@@ -66,6 +67,7 @@ class CareLogUpdateRequest(BaseModel):
     feeding_type: Literal["breast", "formula", "mixed"] | None = None
     amount_ml: int | None = Field(default=None, ge=0, le=500)
     action: Literal["start", "end"] | None = None
+    duration_minutes: int | None = Field(default=None, ge=1, le=720)
     urine: bool | None = None
     stool: bool | None = None
     color: str | None = Field(default=None, max_length=50)

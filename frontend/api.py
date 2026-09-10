@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -86,7 +86,7 @@ def request_backend(
 
 BABY = {
     "baby_id": "baby-001",
-    "baby_name": "서아",
+    "baby_name": "태경",
     "birth_date": "2026-08-03",
     "age_days": 31,
     "gender": "여아",
@@ -101,7 +101,9 @@ BABY = {
 
 def test_login(selected_user: str) -> dict:
     """Keep the demo account picker, but create a real backend session in live mode."""
-    user_id = "user-001" if selected_user.startswith("서아") else "user-002"
+    user_id = selected_user if selected_user in {"user-001", "user-002"} else (
+        "user-001" if selected_user.startswith(("서아", "태경")) else "user-002"
+    )
     if not USE_MOCK_API:
         return request_backend("POST", "/api/test-login", json={"user_id": user_id})
     return {"success": True, "data": {"user_id": user_id, "baby_id": BABY["baby_id"], "session_id": "demo-session"}}
@@ -242,16 +244,47 @@ def get_dashboard(_: str) -> dict:
     }
 
 
-def get_care_records(_: str) -> dict:
+def get_care_records(baby_id: str, *, user_id: str | None = None, session_id: str | None = None, days: int = 1) -> dict:
+    """Read saved care logs from the requested recent-day range."""
+    if not USE_MOCK_API:
+        headers = {}
+        if user_id:
+            headers["X-User-Id"] = user_id
+        if session_id:
+            headers["X-Session-Id"] = session_id
+        end_date = date.today()
+        start_date = end_date - timedelta(days=days - 1)
+        return request_backend(
+            "GET",
+            "/api/care-logs",
+            params={
+                "baby_id": baby_id,
+                "query_type": "range",
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+            },
+            headers=headers,
+        )
     return {
         "success": True,
         "data": [
-            {"time": "오늘 14:30", "icon": "🍼", "title": "분유 수유", "detail": "100ml · 알림 확인으로 기록"},
-            {"time": "오늘 12:05", "icon": "🌙", "title": "낮잠 종료", "detail": "10:20–12:05 · 1시간 45분"},
-            {"time": "오늘 09:40", "icon": "💩", "title": "기저귀 · 대변", "detail": "노란색, 묽은 형태 · 사진 분석 메모 있음"},
-            {"time": "9월 2일", "icon": "📏", "title": "성장 측정", "detail": "몸무게 4.2kg · 키 54.1cm · 머리둘레 37cm"},
+            {"time": "오늘 14:30", "icon": "🍼", "title": "분유 수유", "detail": "100ml · 알림 확인으로 기록", "event_type": "feeding"},
+            {"time": "오늘 12:05", "icon": "🌙", "title": "낮잠 종료", "detail": "10:20–12:05 · 1시간 45분", "event_type": "sleep"},
+            {"time": "오늘 09:40", "icon": "💩", "title": "기저귀 · 대변", "detail": "노란색, 묽은 형태 · 사진 분석 메모 있음", "event_type": "diaper"},
+            {"time": "9월 2일", "icon": "📏", "title": "성장 측정", "detail": "몸무게 4.2kg · 키 54.1cm · 머리둘레 37cm", "event_type": "growth"},
         ],
     }
+
+
+def delete_care_log(log_id: str, *, user_id: str, session_id: str) -> dict:
+    """Delete one saved care log owned by the signed-in user."""
+    if USE_MOCK_API:
+        return {"success": True, "message": "육아 기록을 삭제했습니다.", "data": {"log_id": log_id}}
+    return request_backend(
+        "DELETE",
+        f"/api/care-logs/{log_id}",
+        headers={"X-User-Id": user_id, "X-Session-Id": session_id},
+    )
 
 
 def get_care_pattern(_: str) -> dict:
@@ -559,6 +592,51 @@ def create_care_log(
     )
 
 
+def create_quick_care_log(
+    baby_id: str,
+    *,
+    event_type: str,
+    session_id: str,
+    user_id: str,
+    **details: Any,
+) -> dict:
+    """Save a non-feeding quick record through the existing care-log API."""
+    payload = {
+        "baby_id": baby_id,
+        "event_type": event_type,
+        "input_source": "ui",
+        "recorded_at": datetime.now().astimezone().isoformat(),
+        "idempotency_key": f"{session_id}-{event_type}-{uuid4().hex}",
+        **details,
+    }
+    if USE_MOCK_API:
+        return {"success": True, "message": "육아 기록을 저장했습니다.", "data": payload}
+    return request_backend(
+        "POST",
+        "/api/care-logs",
+        json=payload,
+        headers={"X-User-Id": user_id, "X-Session-Id": session_id},
+    )
+
+
+def get_care_summary(baby_id: str, *, user_id: str, session_id: str) -> dict:
+    """최근 저장 기록을 집계한 육아 관리 상단 요약을 조회합니다."""
+    if not USE_MOCK_API:
+        return request_backend(
+            "GET",
+            f"/api/care-summary/{baby_id}",
+            params={"days": 7},
+            headers={"X-User-Id": user_id, "X-Session-Id": session_id},
+        )
+    return {
+        "success": True,
+        "data": {
+            "period_days": 7,
+            "feeding": {"count": 47, "average_amount_ml": 96, "average_interval_minutes": 192},
+            "sleep": {"total_minutes": 5964, "daily_average_minutes": 852},
+            "diaper": {"stool_count": 19},
+        },
+    }
 def transcribe_audio(audio_file: Any, baby_id: str, session_id: str, user_id: str) -> dict:
     """음성 파일을 STT API로 보내고, 사용자가 확인할 텍스트를 반환한다.
 

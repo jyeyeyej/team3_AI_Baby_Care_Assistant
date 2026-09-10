@@ -21,6 +21,7 @@ from app.services.care.care_log_service import (
     delete_care_log,
     get_care_logs,
     get_care_pattern,
+    get_care_summary,
     get_growth_records,
     update_care_log,
 )
@@ -269,6 +270,18 @@ async def get_care_pattern_api(
         "최근 생활 패턴을 조회했습니다.",
         data,
     )
+
+
+@router.get("/care-summary/{baby_id}")
+async def get_care_summary_api(
+    baby_id: str,
+    days: int = Query(default=7, ge=1, le=30),
+    user_id: str = Depends(get_authenticated_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict:
+    """최근 저장 기록을 집계해 육아 관리 상단 요약에 제공합니다."""
+    data = await get_care_summary(session, user_id, baby_id, days)
+    return create_care_success_response("최근 육아 기록 요약을 조회했습니다.", data)
 
 
 @router.patch("/care-logs/{log_id}")

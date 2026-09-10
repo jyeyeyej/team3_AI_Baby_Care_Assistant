@@ -23,6 +23,36 @@ from sqlalchemy.ext.asyncio import AsyncSession
 router = APIRouter(prefix="/api", tags=["음성 입력"])
 
 
+def _extract_amount_ml(transcript: str) -> int | None:
+    """Support both `100ml` and spoken Korean quantities such as `백 밀리리터`."""
+    match = re.search(
+        r"(\d{1,3}|[일이삼사오육칠팔구영공십백]+)\s*(?:ml|밀리(?:리터)?)",
+        transcript,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    value = match.group(1)
+    if value.isdigit():
+        amount = int(value)
+    else:
+        digits = {"영": 0, "공": 0, "일": 1, "이": 2, "삼": 3, "사": 4,
+                  "오": 5, "육": 6, "칠": 7, "팔": 8, "구": 9}
+        amount = 0
+        pending = 0
+        for character in value:
+            if character in digits:
+                pending = digits[character]
+            elif character == "백":
+                amount += (pending or 1) * 100
+                pending = 0
+            elif character == "십":
+                amount += (pending or 1) * 10
+                pending = 0
+        amount += pending
+    return amount if 0 < amount <= 500 else None
+
+
 async def current_user(request: Request, user_id: str, session_id: str) -> dict:
     session = await get_login_session(request.app.state.redis, user_id, session_id)
     if not session:
@@ -34,12 +64,48 @@ def extract_feeding(transcript: str) -> dict | None:
     lowered = transcript.replace(" ", "").lower()
     if any(word in lowered for word in ("안먹", "못먹", "하나도안먹", "수유안")):
         return None
-    amount = re.search(r"(\d{1,3})\s*(?:ml|밀리(?:리터)?)", transcript, re.I)
+    amount_ml = _extract_amount_ml(transcript)
+    # Do not create an incomplete voice snapshot.  Only an explicit amount in
+    # the supported 1..500ml range may proceed to the caregiver's approval.
+    if amount_ml is None:
+        return None
     if "분유" in transcript:
-        return {"event_type": "feeding", "feeding_type": "formula", "amount_ml": int(amount.group(1)) if amount else None}
+        return {"event_type": "feeding", "feeding_type": "formula", "amount_ml": amount_ml}
     if "모유" in transcript or "수유" in transcript:
-        return {"event_type": "feeding", "feeding_type": "breast", "amount_ml": int(amount.group(1)) if amount else None}
+        return {"event_type": "feeding", "feeding_type": "breast", "amount_ml": amount_ml}
     return None
+
+
+def extract_diaper(transcript: str) -> dict | None:
+    """음성 문장에서 소변·대변 기록 여부를 추출합니다."""
+    lowered = transcript.replace(" ", "").lower()
+    urine = any(word in lowered for word in ("소변", "오줌", "쉬했", "쉬쌌"))
+    stool = any(word in lowered for word in ("대변", "응가", "똥"))
+    if not urine and not stool:
+        return None
+    return {"event_type": "diaper", "urine": urine, "stool": stool}
+
+
+def extract_sleep(transcript: str) -> dict | None:
+    """음성 문장에서 완료된 수면 시간을 분 단위로 추출합니다."""
+    lowered = transcript.replace(" ", "").lower()
+    if not any(word in lowered for word in ("수면", "낮잠", "잤어", "잠잤")):
+        return None
+
+    hours_match = re.search(r"(\d{1,2})시간(?:(\d{1,2})분)?", lowered)
+    minutes_match = re.search(r"(\d{1,3})분", lowered)
+    if hours_match:
+        hours = int(hours_match.group(1))
+        minutes = int(hours_match.group(2) or 0)
+        duration_minutes = hours * 60 + minutes
+    elif minutes_match:
+        duration_minutes = int(minutes_match.group(1))
+    else:
+        return None
+
+    if not 1 <= duration_minutes <= 720:
+        return None
+    return {"event_type": "sleep", "duration_minutes": duration_minutes}
 
 
 @router.post("/speech/transcriptions", response_model=SttResponse)
@@ -54,7 +120,7 @@ async def transcribe_audio(
     if session.get("baby_id") != baby_id:
         raise HTTPException(status_code=403, detail="요청한 아기 정보에 접근할 수 없습니다.")
     transcript = await transcribe_upload(audio)
-    event = extract_feeding(transcript)
+    event = extract_feeding(transcript) or extract_diaper(transcript) or extract_sleep(transcript)
     request_id = str(uuid4())
     if event is None:
         return {
@@ -78,6 +144,7 @@ async def transcribe_audio(
             "response_type": "stt_record_approval",
             "tool_call_id": tool_call_id,
             "record": event,
+            "approval_snapshot": event,
         },
     }
 
@@ -140,7 +207,7 @@ async def confirm_stt(payload: SttApprovalRequest, request: Request) -> dict:
     except Exception as exc:
         snapshot["status"] = "failed"; await request.app.state.redis.set(key, json.dumps(snapshot, ensure_ascii=False), ex=STT_APPROVAL_TTL_SECONDS)
         await write_stt_trace(request.app.state.redis, snapshot, "failed", "MCP_SERVER_UNAVAILABLE")
-        raise HTTPException(status_code=503, detail="승인된 기록 저장에 실패했습니다.") from exc
+        raise HTTPException(status_code=503, detail=f"승인된 기록 저장에 실패했습니다: {exc}") from exc
     snapshot["status"] = "approved"; await request.app.state.redis.set(key, json.dumps(snapshot, ensure_ascii=False), ex=STT_APPROVAL_TTL_SECONDS)
     await write_stt_trace(request.app.state.redis, snapshot, "approved")
     return {"success": True, "message": "승인된 육아 기록을 저장했습니다.", "request_id": payload.request_id, "data": {"tool_call_id": payload.tool_call_id, "record": data}}

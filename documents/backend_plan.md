@@ -235,6 +235,10 @@ Frontend
 
 ## AI Agent·MCP 기능
 
+> 구현 정합성 안내: 현재 MVP는 Backend의 정책 기반 `AgentLoop`으로 계획 → Allowlist Tool 실행 → 결과 검증을 수행합니다. 입력 검증·소유권·기록 저장·STT 승인은 결정론적 FastAPI 정책이 통제하고, OpenAI 모델은 의도 분류와 일반 육아 안내 생성에 사용합니다. 현재 Reflection은 필수값 누락의 보완 질문, 병원 검색 Tool의 1회 재시도·안전 종료, RAG 근거 부족의 안전 폴백을 처리합니다. 모델이 자유롭게 반복 Function Calling을 수행하는 Runtime과 모든 오류 유형의 자동 재계획은 확장 목표입니다.
+
+> 배포 연결: Backend는 `BABY_CARE_MCP_URL`, `BABY_INFO_MCP_URL` 환경변수로 두 MCP 서버의 Streamable HTTP 주소를 호출한다. 개발 기본값은 localhost이지만, 운영에서는 별도 MCP 서버의 내부 DNS 또는 고정 주소를 설정한다. Frontend는 MCP 서버를 직접 호출하지 않는다.
+
 ```text
 클라이언트
 → FastAPI /api/chat/stream
@@ -395,12 +399,12 @@ Redis 상태와 최근 채팅은 목적을 분리합니다.
 
 | Redis Key | 역할 | TTL |
 | --- | --- | --- |
-| `session:{user_id}:{session_id}` | 현재 Agent 상태, 처리 단계, 현재 요청 연결 정보 | 1일, Sliding TTL |
+| `session:{user_id}:{session_id}` | 테스트 로그인 세션과 사용자·아기 식별 정보 | 1일 TTL |
 | `chat:{user_id}:{session_id}` | 최근 사용자·AI 메시지 최대 8개 | 1일, Sliding TTL |
 
 Redis Key에는 반드시 `user_id`, `session_id`를 포함합니다. `baby_id`, `request_id`, `tool_call_id`가 존재하는 흐름에서는 Redis 값 내부에도 함께 저장하며 조회 시 Key의 식별자와 값 내부 식별자가 일치하는지 다시 확인합니다. 해당 흐름에서 아직 생성되지 않은 식별자는 `null`로 둘 수 있습니다.
 
-이렇게 분리하여 Agent 상태가 바뀔 때 최근 채팅 목록 전체를 다시 저장하지 않습니다.
+로그인 세션과 최근 채팅을 분리하여 인증 정보와 대화 문맥이 섞이지 않도록 합니다. 현재 MVP는 Agent 실행 상태를 별도 Redis State로 저장하지 않습니다.
 
 ---
 
@@ -987,7 +991,7 @@ Redis Key는 사용자·세션 범위를 명확히 분리하여 다른 사용자
 
 | Redis Key | 저장 내용 | TTL |
 | --- | --- | --- |
-| `session:{user_id}:{session_id}` | 현재 Agent 상태, 처리 단계, 현재 요청 연결 정보 | 1일, Sliding TTL |
+| `session:{user_id}:{session_id}` | 테스트 로그인 세션과 사용자·아기 식별 정보 | 1일 TTL |
 | `chat:{user_id}:{session_id}` | 최근 사용자·AI 메시지 최대 8개 | 1일, Sliding TTL |
 | `reminder:{user_id}:{baby_id}` | 현재 수유 알림 상태 | 1일 |
 | `stt_approval:{user_id}:{session_id}:{tool_call_id}` | STT 육아 기록 승인 Snapshot | 10분 |
@@ -1347,7 +1351,7 @@ Memory는 별도 운영 MCP 서버가 아니라 FastAPI Baby Agent 내부 계층
 | Business Data | PostgreSQL | 아기 정보·육아 기록 |
 | RAG Knowledge | PostgreSQL + pgvector | 육아 지식 검색 |
 | Short-term Memory | Redis | 최근 8개 대화·임시 상태 |
-| Long-term Memory | PostgreSQL `user_memories` | 장기 사용자 맥락 |
+| Long-term Memory | PostgreSQL `user_memories` | 현재는 안전한 답변 선호 정보 |
 
 ```text
 "오늘 아침 몇 시에 수유했어?"
@@ -1361,14 +1365,14 @@ Memory는 별도 운영 MCP 서버가 아니라 FastAPI Baby Agent 내부 계층
 
 Redis Short-term Memory는 상태와 채팅을 분리합니다.
 
-- `session:{user_id}:{session_id}`: 현재 Agent 상태·처리 단계, TTL 1일, Sliding TTL
+- `session:{user_id}:{session_id}`: 테스트 로그인 세션·사용자/아기 식별 정보, TTL 1일
 - `chat:{user_id}:{session_id}`: 최근 사용자·AI 메시지 최대 8개, TTL 1일, Sliding TTL
 
 두 Key 모두 사용자·세션 식별자를 기준으로 격리하고 조회 시 값 내부의 식별자도 다시 검증합니다.
 
 ## 34.3 Long-term Memory 저장 기준
 
-답변 스타일·길이·단위 선호·과거 결정 등 이후 대화에서 재사용 가치가 있는 정보만 저장합니다. 정확한 육아 기록은 `user_memories`가 아니라 `care_logs`에 저장합니다.
+현재 구현은 답변 스타일·길이·단위 선호처럼 안전한 선호 정보만 저장합니다. 정확한 육아 기록은 `user_memories`가 아니라 `care_logs`에 저장하며, 대화 요약·과거 결정의 자동 저장은 확장 목표입니다.
 
 ## 34.4 Memory 안전성
 
@@ -1394,7 +1398,7 @@ API Key·비밀번호·카드정보 등 민감정보를 Memory에 저장하지 �
 - 수유 알림은 FastAPI가 `latest_feeding` 기준으로 계산
 - Memory는 Agent 내부 계층으로 유지
 - Redis Key는 `user_id`·`session_id`를 포함하여 사용자·세션별로 격리
-- Agent 상태는 `session:{user_id}:{session_id}`, 최근 대화는 `chat:{user_id}:{session_id}`로 분리
+- 로그인 세션은 `session:{user_id}:{session_id}`, 최근 대화는 `chat:{user_id}:{session_id}`로 분리
 - Agent 실행 Trace는 `trace:{user_id}:{session_id}:{request_id}`에 TTL 1일로 저장하며 내부 추론은 저장하지 않음
 - STT 승인은 B 방식으로 처리: 승인 후 Agent Loop 재개 없이 Snapshot 검증 → Tool 실행 → FastAPI 결과 반환
 - 채팅 응답은 범위 밖·미지원·추가 확인 필요·정책 차단 타입을 일반 오류와 구분

@@ -13,5 +13,7 @@ async def execute_stt_pending_call(snapshot: dict) -> dict:
     arguments["idempotency_key"] = snapshot["idempotency_key"]
     result = await record_care_event(arguments)
     if not result.get("success"):
-        raise RuntimeError("승인된 육아 기록 저장에 실패했습니다.")
+        error = result.get("error") or {}
+        reason = result.get("message") or error.get("detail") or "승인된 육아 기록 저장에 실패했습니다."
+        raise RuntimeError(reason)
     return result.get("data", result)

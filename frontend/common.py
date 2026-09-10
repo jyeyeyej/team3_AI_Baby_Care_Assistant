@@ -35,6 +35,7 @@ def init_session() -> None:
         "last_navigation_query": None,
         "pending_notice": "",
         "editing_record_index": None,
+        "editing_record_type": None,
         "pending_stt_tool_call_id": None,
         "chat_draft": "",
         "chat_draft_nonce": 0,
@@ -54,6 +55,7 @@ def init_session() -> None:
         "last_diaper_signature": "",
         "request_in_progress": False,
         "quick_record_type": None,
+        "quick_edit_mode": False,
         "quick_record_notice": "",
         "navigation_restored": False,
     }
@@ -123,8 +125,8 @@ def apply_style() -> None:
         }
         .block-container, [data-testid="stMainBlockContainer"] { max-width: 1080px !important; padding: 1.6rem 1.35rem 2rem; margin: 0 auto; }
         [data-testid="stSidebar"] { background: #FFFFFF; border-right: 1px solid #E3E7F1;
-            min-width: 230px !important; max-width: 230px !important; }
-        [data-testid="stSidebar"] > div:first-child { min-width: 230px !important; max-width: 230px !important; }
+            min-width: 180px !important; max-width: 180px !important; }
+        [data-testid="stSidebar"] > div:first-child { min-width: 180px !important; max-width: 180px !important; }
         [data-testid="stSidebar"] > div:first-child { padding-top: 1.1rem; }
         /* pages/ 폴더에서 Streamlit이 자동 생성하는 메뉴는 사용하지 않습니다. */
         [data-testid="stSidebarNav"] { display: none; }
@@ -159,6 +161,9 @@ def apply_style() -> None:
         .record-detail { color:#6577A0; font-size:.76rem; }
         div[data-testid="stButton"] > button { background:#FFFFFF; border-radius: 9px; border-color: #DFE4F1; font-weight: 650; }
         div[data-testid="stButton"] > button[kind="primary"] { background:#6374DC; border-color:#6374DC; color:#FFFFFF; }
+        div[data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"] { background:#6374DC !important; border-color:#6374DC !important; color:#FFFFFF !important; }
+        div[data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"]:hover,
+        div[data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"]:focus-visible { background:#5667CE !important; border-color:#5667CE !important; }
         div[data-baseweb="input"] > div, div[data-baseweb="select"] > div { background:#F6F7FB; border-color:#DFE4F1; }
         .stTabs [data-baseweb="tab-list"] { gap:0; background:#EEF1FF; padding:.28rem; border-radius:11px; }
         .stTabs [data-baseweb="tab"] { flex:1; justify-content:center; border-radius:8px; height:39px;

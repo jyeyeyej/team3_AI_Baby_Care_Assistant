@@ -18,7 +18,7 @@
 - 임시 상태: Redis
 - 임베딩: Ollama Embedding
 - 벡터 저장·검색: PostgreSQL pgvector
-- 최종 답변: OpenAI Responses API
+- AI 응답: 현재 MVP는 Backend의 정책 기반 `AgentLoop`으로 계획 → 허용 Tool 실행 → 결과 검증을 통제하고, OpenAI Chat Completions 기반 의도 분류·일반 안내와 정보 서버의 OpenAI Responses API RAG 답변 생성을 함께 사용
 - 로그인·예방접종: 가짜 데이터
 - 음성 입력: 보호자 음성을 텍스트로 변환하는 STT 포함
 
@@ -42,7 +42,9 @@
 - 로그인한 테스트 사용자의 아기 정보만 조회합니다.
 - 알레르기는 중요한 건강정보로 저장하고 관련 답변 전에 우선 확인합니다.
 - 의료 진단, 처방, 정상·비정상 판정을 하지 않습니다.
-- 데이터가 변경되는 기록·수정·삭제 작업은 사용자 승인 후 실행합니다.
+- 텍스트·화면 입력의 기록은 필수값·형식 검증 후 저장합니다.
+- 음성(STT)에서 추출한 기록만 Redis 승인 대기 후 보호자가 확인해야 저장합니다.
+- 아기 정보와 육아 기록의 수정·삭제는 화면의 사용자 확인 절차를 거쳐 FastAPI API로 처리합니다.
 - 조회·검색 Tool은 별도 승인 없이 실행할 수 있습니다.
 - 음성이나 사진을 분석했더라도 사용자 승인 없이 육아 기록으로 저장하지 않습니다.
 
@@ -88,6 +90,13 @@
 
 ## 7. 전체 시스템 구성
 
+배포 구성은 다음처럼 분리합니다. Frontend는 Backend API만 호출하며, Backend는 PostgreSQL·Redis와 같은 서버에서 동작할 수 있습니다. 두 MCP 서버는 별도 서버로 배포하고, Backend의 `BABY_CARE_MCP_URL`, `BABY_INFO_MCP_URL` 환경변수에 각 서버의 Streamable HTTP 주소를 설정합니다. 로컬 테스트의 `localhost` 주소는 개발 기본값일 뿐 운영 주소로 고정하지 않습니다.
+
+```text
+Frontend 서버 1대 → Backend·PostgreSQL·Redis 서버 1대 → baby_care_server 1대
+                                             └────────→ baby_info_server 1대
+```
+
 !image.png
 
 ```mermaid
@@ -100,7 +109,7 @@ flowchart TD
     E --> C
     F --> C
     F --> G["Ollama + pgvector"]
-    E --> H["OpenAI Vision / Responses"]
+    E --> H["기저귀 사진 관찰 Workflow"]
     F --> I["OpenAI Responses API"]
 ```
 
@@ -147,7 +156,7 @@ flowchart TD
 flowchart TD
     A["음성 업로드"] --> B["FastAPI 파일 검증"]
     B --> C["STT 텍스트 변환"]
-    C --> D["Agent 의도·필드 추출"]
+    C --> D["Backend 규칙 기반 기록 필드 추출"]
     D --> E["Redis 승인 대기"]
     E --> F{"보호자 승인"}
     F -->|승인| G["record_care_event"]
@@ -155,13 +164,13 @@ flowchart TD
     G --> I["care_logs 저장"]
 ```
 
-지원 형식은 MP3·WAV·M4A·WebM이며 최대 20MB로 제한합니다. 음성 원본은 처리 후 삭제하고 DB나 로그에 저장하지 않습니다.
+지원 형식은 MP3·WAV·M4A·WebM이며 최대 20MB로 제한합니다. 현재 MVP는 STT 텍스트에서 수유·수면·배변 기록을 Backend 규칙으로 추출하며, 모델 기반 의도·필드 추출은 확장 목표입니다. 음성 원본은 처리 후 삭제하고 DB나 로그에 저장하지 않습니다.
 
 ## 11. 수유 알림
 
 마지막으로 확정된 수유 시각과 `reminder_settings`의 간격으로 다음 알림 시각을 계산합니다. 실제 푸시는 보내지 않고 로그인 후 홈과 AI 육아 도우미 화면에 같은 알림 카드를 표시합니다.
 
-- **수유했어요**: 수유량·방식·시각 확인 → 사용자 승인 → 기록 저장 → 실제 수유 시각부터 다시 계산
+- **수유했어요**: 수유량·방식·시각 입력 및 검증 → 기록 저장 → 실제 수유 시각부터 다시 계산
 - **10분 후**: 현재 시각부터 10분 후 다시 표시
 - **건너뛰기**: 육아 기록을 저장하지 않고 현재 시각부터 설정 간격을 다시 계산
 
@@ -194,16 +203,12 @@ flowchart TD
 
 현재 위치·위도·경도는 사용하지 않습니다. 사용자가 입력한 지역명으로 소아과와 응급실을 검색합니다. 결과에는 병원명·주소·전화번호와 확인 시점을 표시하고, 실제 운영시간과 진료 가능 여부는 방문 전에 전화로 확인하도록 안내합니다.
 
-## 15. Tool 승인 정책
+## 15. 저장·승인 정책
 
-승인이 필요한 작업:
-
-- `record_care_event`
-- 아기 정보 수정
-- 육아 기록 수정
-- 육아 기록 삭제
-
-승인 대기 데이터는 Redis의 `tool_approval:{tool_call_id}`에 짧은 TTL로 저장합니다. 중복 저장 방지를 위해 `idempotency_key`를 사용합니다.
+- 텍스트 대화와 화면에서 입력한 `record_care_event`는 필수값·형식 검증을 통과하면 저장합니다.
+- STT로 추출한 기록만 사용자가 검토·수정·승인한 뒤 `record_care_event`를 한 번 호출합니다.
+- STT 승인 대기 데이터는 Redis의 `stt_approval:{user_id}:{session_id}:{tool_call_id}`에 10분 TTL로 저장합니다. 승인·거절·만료 시에는 재사용하지 않으며, `idempotency_key`로 중복 저장을 막습니다.
+- 아기 정보와 육아 기록의 수정·삭제는 화면에서 확인을 받은 뒤 FastAPI API로 처리합니다. 이는 Agent Tool 승인 대기가 아닙니다.
 
 ## 16. 안전 기준
 
@@ -218,10 +223,11 @@ flowchart TD
 
 - MCP 서버 이름은 `baby_care_server`, `baby_info_server`로 통일
 - MCP Tool은 각각 3개와 7개
-- PostgreSQL 테이블은 `babies`, `care_logs`, `reminder_settings`, `documents`, `document_chunks`
+- PostgreSQL 테이블은 `babies`, `care_logs`, `reminder_settings`, `user_memories`, `documents`, `document_chunks` 총 6개
 - Supabase를 사용하지 않음
 - 육아 기록은 `care_logs` 하나로 통합
-- 기록·수정·삭제는 사용자 승인 후 실행
+- 텍스트·화면 기록은 검증 후 저장하고, STT 기록만 승인 후 저장
+- 수정·삭제는 화면 확인 후 FastAPI API로 처리
 - RAG는 Ollama Embedding과 PostgreSQL pgvector 사용
 - 병원은 지역명으로 검색
 - 가짜 로그인·가짜 예방접종·화면 알림으로 시연 가능
@@ -321,8 +327,8 @@ flowchart TD
 ```
 수유 버튼
 → 방식·수유량·시각 입력
-→ 확인 카드
-→ 기록 완료
+→ 필수값·형식 검증
+→ 기록 저장
 → baby_care_server 저장
 → 홈·육아 관리 갱신
 ```
@@ -614,8 +620,8 @@ OPENAI_API_KEY=
 OPENAI_MODEL=
 STT_MODEL=
 
-BABY_CARE_MCP_URL=http://localhost:8101
-BABY_INFO_MCP_URL=http://localhost:8102
+BABY_CARE_MCP_URL=http://localhost:8101/mcp
+BABY_INFO_MCP_URL=http://localhost:8102/mcp
 
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_EMBEDDING_MODEL=
@@ -624,6 +630,3 @@ OLLAMA_EMBEDDING_DIMENSION=
 PEDIATRIC_API_KEY=
 EMERGENCY_API_KEY=
 ```
-
-
-

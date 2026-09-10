@@ -2,6 +2,8 @@
 
 > 프론트엔드(Streamlit)와 FastAPI 사이의 연동 기준입니다. 아래에서 **확정**은 기존 기획 문서에 명시된 내용이며, **백엔드 확정 필요**는 구현 전에 담당자와 정해야 하는 항목입니다.
 
+> 실행 설정: 프론트는 개발 편의를 위해 `USE_MOCK_API=true`가 기본값입니다. 실제 FastAPI 연동 시험·시연에서는 `USE_MOCK_API=false`와 `BACKEND_API_URL`을 설정합니다.
+
 ## 1. 공통 규칙
 
 ### 기본 URL
@@ -370,7 +372,7 @@ POST /api/images/diaper-analysis
 POST /api/chat
 ```
 
-**백엔드 확정 필요:** request body의 실제 필드명. 프론트에서 필요한 정보는 최소 `message`, `baby_id`, `session_id`입니다.
+요청 body는 `message`, `baby_id`, `session_id`이며, 로그인 검증을 위해 `X-User-Id`, `X-Session-Id` 헤더를 함께 보냅니다. 본문의 `user_id`는 호환용으로만 허용되며 신뢰하지 않습니다.
 
 채팅 응답 `response_type`:
 
@@ -409,17 +411,23 @@ completed
 error
 ```
 
-- Tool 호출이 없는 질문은 `using_tool` 단계가 생략될 수 있습니다.
+- 현재 구현은 실제 Tool 호출 여부와 관계없이 사용자 진행 표시를 위해 `using_tool` 이벤트를 보냅니다. 이 이벤트만으로 Tool 실행 여부를 판단하지 않습니다.
 - `error` 이벤트를 받은 뒤 스트림을 종료합니다.
 - 프론트는 내부 Prompt, Memory 원문, Stack Trace를 보여 주지 않습니다.
 
-**백엔드 확정 필요:** SSE의 실제 event 이름, `data` JSON 구조, 최종 답변과 `response_type` 전달 방식.
+SSE event 이름은 위 목록으로 확정되어 있으며, `completed` 이벤트의 `data.result`에 일반 채팅 응답과 같은 최종 결과를 담습니다.
 
 ---
 
 ## 8. STT 승인 계약
 
-문서상 STT 처리 규칙은 확정되어 있으나, 업로드·승인 API 경로는 아직 명시되지 않았습니다.
+STT 업로드와 승인 API 경로는 다음과 같이 구현되어 있습니다.
+
+| 기능 | HTTP | 경로 |
+| --- | --- | --- |
+| 음성 업로드·STT 변환 | POST | `/api/speech/transcriptions` |
+| STT 기록 승인 | POST | `/api/speech/approvals/confirm` |
+| STT 기록 거절 | POST | `/api/speech/approvals/reject` |
 
 확정 규칙:
 
@@ -429,13 +437,13 @@ error
 4. 사용자가 승인하면 백엔드는 Redis의 Snapshot을 검증하고 동일 기록을 한 번만 저장합니다.
 5. 미수유 표현은 기록과 승인 Snapshot을 생성하지 않습니다.
 
-**백엔드 확정 필요:**
-
 | 필요한 API | 필요한 데이터 |
 | --- | --- |
-| 음성 업로드·STT | 파일, `baby_id`, `session_id` |
+| 음성 업로드·STT | multipart form-data: `audio`, `baby_id`, `session_id`, `user_id` |
 | STT 승인 | `tool_call_id`, `baby_id`, `session_id`, `request_id` |
 | STT 거절 | `tool_call_id`, `baby_id`, `session_id`, `request_id` |
+
+승인·거절 요청에는 `X-User-Id`, `X-Session-Id` 헤더도 함께 보냅니다.
 
 프론트는 승인 요청에서 기록 내용·수유량을 다시 수정해 신뢰 가능한 값으로 보내지 않습니다. 사용자에게 보인 Snapshot과 `tool_call_id`로 승인만 요청합니다.
 

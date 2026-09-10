@@ -129,27 +129,30 @@ def record_care_event(request: RecordCareEventInput) -> CareRecordToolResponse:
                 "growth 기록에는 weight_kg, height_cm, head_circumference_cm 중 하나 이상이 필요합니다.",
             )
     else:
-        if request.action is None:
-            return failure(
-                "INVALID_CARE_EVENT",
-                "수면 시작 또는 종료를 선택해 주세요.",
-                "sleep 기록에는 action이 필요합니다.",
-            )
+        if request.duration_minutes is not None:
+            details = {"duration_minutes": request.duration_minutes}
+        else:
+            if request.action is None:
+                return failure(
+                    "INVALID_CARE_EVENT",
+                    "수면 시간을 입력하거나 시작 또는 종료를 선택해 주세요.",
+                    "sleep 기록에는 duration_minutes 또는 action이 필요합니다.",
+                )
 
-        open_sleep = care_log_repository.find_open_sleep(request.baby_id)
-        if request.action == "start" and open_sleep is not None:
-            return failure(
-                "SLEEP_ALREADY_STARTED",
-                "이미 수면 중으로 기록되어 있습니다.",
-                "기존 수면을 먼저 종료한 뒤 다시 시작해 주세요.",
-            )
-        if request.action == "end" and open_sleep is None:
-            return failure(
-                "SLEEP_START_NOT_FOUND",
-                "종료할 수면 시작 기록이 없습니다.",
-                "수면 시작을 먼저 기록해 주세요.",
-            )
-        details = {"action": request.action}
+            open_sleep = care_log_repository.find_open_sleep(request.baby_id)
+            if request.action == "start" and open_sleep is not None:
+                return failure(
+                    "SLEEP_ALREADY_STARTED",
+                    "이미 수면 중으로 기록되어 있습니다.",
+                    "기존 수면을 먼저 종료한 뒤 다시 시작해 주세요.",
+                )
+            if request.action == "end" and open_sleep is None:
+                return failure(
+                    "SLEEP_START_NOT_FOUND",
+                    "종료할 수면 시작 기록이 없습니다.",
+                    "수면 시작을 먼저 기록해 주세요.",
+                )
+            details = {"action": request.action}
     saved = care_log_repository.insert_care_log(
         log_id=str(uuid4()),
         baby_id=request.baby_id,
