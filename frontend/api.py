@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -21,9 +22,19 @@ from dotenv import load_dotenv
 
 # Streamlit is launched from the frontend directory in some environments, so
 # load the project-level settings explicitly instead of relying on its shell.
-load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+# 실행 셸에 남아 있는 이전 값보다 프로젝트 .env를 우선해야 팀별 서버 주소
+# 변경이 즉시 반영됩니다.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=True)
 
-BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000").rstrip("/")
+def _normalize_backend_url(value: str) -> str:
+    """Accept a mistakenly pasted Markdown URL while always using its raw URL."""
+    match = re.fullmatch(r"\[([^\]]+)\]\([^\)]+\)", value.strip())
+    return (match.group(1) if match else value).rstrip("/")
+
+
+BACKEND_API_URL = _normalize_backend_url(
+    os.getenv("BACKEND_API_URL", "http://localhost:8000")
+)
 USE_MOCK_API = os.getenv("USE_MOCK_API", "true").lower() == "true"
 API_TIMEOUT_SECONDS = float(os.getenv("BACKEND_API_TIMEOUT_SECONDS", "10"))
 

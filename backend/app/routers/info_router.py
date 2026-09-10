@@ -1,6 +1,7 @@
 """Hospital search routes."""
 
 import json
+import logging
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -15,6 +16,7 @@ from app.services.info.vaccination_service import get_vaccinations
 
 
 router = APIRouter(prefix="/api", tags=["병원 검색"])
+logger = logging.getLogger(__name__)
 
 
 def _sse_event(name: str, data: dict) -> str:
@@ -51,6 +53,7 @@ async def search_hospitals_api(
         # 클라이언트가 재시도 가능한 외부 의존성 장애로 취급한다.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except RuntimeError as exc:
+        logger.exception("병원 검색 MCP 호출에 실패했습니다.")
         raise HTTPException(status_code=503, detail="병원 검색 서비스에 연결할 수 없습니다.") from exc
     return {"success": True, "message": "병원 검색 결과를 조회했습니다.", "data": HospitalSearchResponse.model_validate(data), "request_id": str(uuid4())}
 
@@ -79,6 +82,7 @@ async def search_hospitals_stream_api(
         except ValueError as error:
             result = {"success": False, "message": str(error)}
         except RuntimeError:
+            logger.exception("병원 검색 SSE의 MCP 호출에 실패했습니다.")
             result = {"success": False, "message": "병원 검색 서비스에 연결할 수 없습니다."}
         yield _sse_event("formatting_result", {"status": "formatting_result"})
         yield _sse_event("completed", {"status": "completed", "result": result})

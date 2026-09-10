@@ -139,10 +139,13 @@ streamlit run frontend/app.py
 ```env
 프론트엔드 PC
   └─ Streamlit
-       ├─ http://192.168.0.10:8000  → Backend + DB + Redis PC
-       ├─ http://192.168.0.11:8101  → baby_care MCP PC
-       └─ http://192.168.0.12:8102  → baby_info MCP PC
+       ├─ http://192.168.1.12:8000  → Backend + DB + Redis PC
+       ├─ http://192.168.0.25:8101  → baby_care MCP PC
+       └─ http://192.168.0.26:8102  → baby_info MCP PC
 ```
+Test-NetConnection 192.168.1.12 -port 8000 성공
+Test-NetConnection 192.168.1.25 -Port 8101 성공
+Test-NetConnection 192.168.1.26 -Port 8102 성공 
 
 `USE_MOCK_API=true`에서는 준비된 테스트 데이터로 화면을 시연할 수 있습니다.
 백엔드가 연결된 환경에서는 `false`로 변경하여 실제 API를 호출합니다.
