@@ -197,3 +197,12 @@ Test-NetConnection 192.168.1.26 -Port 8102 성공
 - [API 계약서](documents/frontend_api_contract.md)
 - [육아 기록·패턴 MCP 서버 계획서](documents/baby_care_server_plan.md)
 - [육아 정보 RAG·병원 검색 MCP 서버 계획서](documents/baby%20info%20server_plan.md)
+
+## 화면
+<img width="640" height="324" alt="육아기록_로그인부터_10MB이하" src="https://github.com/user-attachments/assets/36c11b2c-4f10-4623-9b5e-2ce648aad255" />
+
+
+
+
+
+
