@@ -199,7 +199,8 @@ Test-NetConnection 192.168.1.26 -Port 8102 성공
 - [육아 정보 RAG·병원 검색 MCP 서버 계획서](documents/baby%20info%20server_plan.md)
 
 ## 화면
-<img width="360" height="203" alt="베베온_시연_영상_정예진" src="https://github.com/user-attachments/assets/78a8746d-0999-48f3-9e8e-d3ac65918a83" />
+<img width="640" height="360" alt="베베온_시연_포트폴리오용_정예진" src="https://github.com/user-attachments/assets/9f0f7e6a-1ada-4103-bbfe-02d5837b906e" />
+
 
 
 
